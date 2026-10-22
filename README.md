@@ -332,7 +332,7 @@ The action is a **sample** from a diagonal Gaussian with a state-independent
 log-std $\rho \in \mathbb{R}^2$ (two extra learned parameters):
 
 $$
-u \sim \mathcal{N}\big(\mu, \operatorname{diag}(\sigma_a^2)\big), \qquad \sigma_a = e^{\rho} \in [0.074, 1.49]
+u \sim \mathcal{N}\big(\mu, \mathrm{diag}(\sigma_a^2)\big), \qquad \sigma_a = e^{\rho} \in [0.074, 1.49]
 $$
 
 Each worm draws its own $\varepsilon$ from its own RNG stream, so identical weights
@@ -392,12 +392,12 @@ $$
 
 **Wall response.** A worm that would leave the arena is clamped to
 $[M, W-M] \times [M, H-M]$. Rather than stopping dead, the head *slides* along the
-boundary: with $\Delta p$ the clamped displacement, $\theta_{slide} = \arg(\Delta p)$
-and $\theta_{inward} = \arg(\text{centre} - p)$:
+boundary: with $\Delta p$ the clamped displacement, $\theta_{slide} = \mathrm{arg}(\Delta p)$
+and $\theta_{inward} = \mathrm{arg}(\text{centre} - p)$:
 
 $$
 v \leftarrow 0.55\,v, \qquad \tau \leftarrow 0.7\,\tau, \qquad
-\theta \leftarrow \theta_{slide} + \min\big(0.35, \max(-0.35, \operatorname{wrap}(\theta_{inward} - \theta_{slide}))\big) \cdot 0.55
+\theta \leftarrow \theta_{slide} + \min\big(0.35, \max(-0.35, \mathrm{wrap}(\theta_{inward} - \theta_{slide}))\big) \cdot 0.55
 $$
 
 so the body stays in a line behind the head instead of piling into it.
@@ -463,13 +463,13 @@ $$
 $$
 
 $$
-\mathcal{L}_{policy} = -\,\mathbb{E}\Big[\min\big(\varrho A,\ \operatorname{clip}(\varrho, 1-\epsilon, 1+\epsilon)\,A\big)\Big],
+\mathcal{L}_{policy} = -\,\mathbb{E}\Big[\min\big(\varrho A,\ \mathrm{clip}(\varrho, 1-\epsilon, 1+\epsilon)\,A\big)\Big],
 \qquad \varrho = \frac{\pi_\theta(u \mid o)}{\pi_{\theta_{old}}(u \mid o)}
 $$
 
 $$
 \mathcal{L}_{value} = \mathbb{E}\Big[\tfrac{1}{2}\max\big((V - \hat{R})^2,\ (V_{clip} - \hat{R})^2\big)\Big],
-\qquad V_{clip} = V_{old} + \operatorname{clip}(V - V_{old}, -\epsilon_v, \epsilon_v)
+\qquad V_{clip} = V_{old} + \mathrm{clip}(V - V_{old}, -\epsilon_v, \epsilon_v)
 $$
 
 $$
