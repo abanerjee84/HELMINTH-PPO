@@ -48,13 +48,13 @@ no PyTorch, no TensorFlow, no ML dependency at all.
 - **PPO from scratch** — Gaussian actor, separate value critic, clipped surrogate
   objective, clipped value loss, entropy bonus, global gradient-norm clipping, and
   Adam, all implemented on `Float32Array`s with hand-written forward and backward
-  passes. 2 765 parameters, ~110 ms for a full update.
+  passes. 2 861 parameters, ~110 ms for a full update.
 - **Parallel on-policy rollouts** — all ten worms are sampled in lockstep, so one
   policy update consumes a full cohort of trajectories. A cohort ends only when the
   last worm in it is dead.
 - **28-channel sensorium** — 8 food rays, 4 hazard rays, 4 wall rays, 4 rival-worm
-  rays, 4 chomper rays, 2 self-body rays, energy, and bias, plus a 2-channel per-worm
-  drift vector.
+  rays, 4 chomper rays, 2 self-body rays, energy, and bias, plus the worm's own speed,
+  spin rate, and a 2-channel per-worm drift vector.
 - **Body-aware worms** — 15-segment bodies, self-collision, worm-to-worm collision,
   wall response, and lethal energy loss.
 - **Chomper patrol** — three predators that wander, chase, lunge, bite, digest, and
@@ -142,7 +142,7 @@ live in `docs/screenshots/`.
 
 ```mermaid
 flowchart LR
-    A["Sense<br/>28 sensors + drift"] --> B["Act<br/>actor samples a motor command"]
+    A["Sense<br/>32 channels"] --> B["Act<br/>actor samples a motor command"]
     B --> C["Move<br/>steering, thrust, body, energy"]
     C --> D["Interact<br/>food, toxins, chompers, bodies"]
     D --> E["Reward<br/>delta of the fitness terms"]
@@ -184,12 +184,12 @@ The consequence is visible in the data: an untrained policy loses its wave in ab
 
 | | |
 | --- | --- |
-| Actor | `30 → 24 → 24 → 2`, tanh hidden layers, linear output |
-| Critic | `30 → 24 → 24 → 1`, a **separate** network so a bad value estimate can never poison the policy gradient |
-| Parameters | 1 394 actor + 1 369 critic + 2 log-std = **2 765** |
+| Actor | `32 → 24 → 24 → 2`, tanh hidden layers, linear output |
+| Critic | `32 → 24 → 24 → 1`, a **separate** network so a bad value estimate can never poison the policy gradient |
+| Parameters | 1 442 actor + 1 417 critic + 2 log-std = **2 861** |
 | Action distribution | Diagonal Gaussian with a state-independent log-std |
 | Motor mapping | `turn = tanh(1.8·u₀)`, `thrust = σ(2.2·u₁)` |
-| Observation | 28 sensors (all in `[0, 1]`) + a 2-channel drift vector |
+| Observation | 28 sensors (all in `[0, 1]`) + speed, spin, and a 2-channel drift vector |
 
 **The 26th and 27th channels matter.** A single policy driving ten worms makes the
 cohort behave like one body: identical headings, mutual collisions, and a lot of
@@ -261,19 +261,20 @@ instead of blocking the render loop for 110 ms.
 
 ## Does it actually learn?
 
-Measured over a single 400 000-step run (55 cohorts, one fixed arena):
+Measured over a single 400 000-step run (66 cohorts, one fixed arena):
 
 | Metric | First 6 cohorts | Middle 6 | Last 6 | Change |
 | --- | ---: | ---: | ---: | ---: |
-| Mean cohort fitness | 1 350 | 1 221 | 4 338 | **+221%** |
-| Mean cohort length (seconds alive) | 73 s | 61 s | 172 s | **+136%** |
-| Best single cohort | — | — | 38 671 | — |
-| Longest single cohort | — | — | 302 s | — |
+| Mean cohort fitness | 1 464 | 2 203 | 4 343 | **+197%** |
+| Mean cohort length (seconds alive) | 70 s | 92 s | 164 s | **+134%** |
+| Best single cohort | — | — | 34 514 | — |
+| Longest single cohort | — | — | 263 s | — |
 
 The second row is the one that matters most: a cohort is only scored once it has
 been *wiped out*, so the score measures how long the policy kept its worms alive
 against a hostile arena. The last cohorts survive more than twice as long as the
-first ones, and the best single cohort scored 38 671 across five minutes of survival.
+first ones, and the best single cohort scored 34 514 across four and a half minutes
+of survival.
 
 The same build, before the policy gradient was corrected, *degraded* instead of
 improving — the policy learned to stop foraging and die within seconds. That failure
@@ -383,6 +384,8 @@ it and drifts back into the arena rather than stopping dead.
 | Self body | 2 | — | How tightly the head is folded against its own trailing segments, and which side that body lies on |
 | Energy | 1 | — | Current energy normalized to maximum |
 | Bias | 1 | — | Constant `1` |
+| Speed | 1 | 170 | Current speed over the maximum, so the policy can tell "closing on the wall at 170" from "drifting at 30" |
+| Spin | 1 | 2.65 | Current angular velocity over the maximum turn rate, in `[-1, 1]` |
 | Drift | 2 | — | A per-worm random unit vector, re-rolled each cohort |
 
 Food uses eight rays around the heading. Hazard, wall, rival, and chomper channels
@@ -391,6 +394,19 @@ the other worm's head, so body contact is represented too. The two self channels
 worm feel its own body: one reports how far the head has folded back onto its
 trailing segments, the other reports which side that body lies on, so a coil can be
 unwound before it becomes a lethal self-collision.
+
+**Every spatial channel is heading-relative**, which is why the last four inputs
+matter. The speed and spin channels are the only way the policy knows anything about
+its own motion: without them, a worm coasting at 170 u/s and one drifting at 30 u/s
+produce an identical wall reading, even though the first has to turn *now*. With
+them the observation is Markov with respect to the control-relevant dynamics.
+
+**There is deliberately no absolute heading.** The arena is a fixed seed, so a
+world-frame reference would let the policy memorise the bloom layout and drive to it
+instead of learning to forage — a much better score for a much worse policy. The
+per-worm drift vector is a constant, so it acts as a per-worm bias rather than a
+frame of reference, and it breaks the symmetry of ten clones sharing one policy
+without handing any of them a shared world map.
 
 ---
 
@@ -451,9 +467,7 @@ Two changes fixed it:
 
 1. **A wall channel.** Four heading-relative rays (front, left, back, right) report
    the distance to the boundary within 210 units, so the policy can see the edge
-   before it touches it. This is worth roughly 10 % of the final cohort score once
-   the trap below is gone (paired across four seeds, it wins 3/4 on both score and
-   survival time).
+   before it touches it.
 2. **A slide instead of a pin.** A wall hit now redirects the head along the boundary
    tangent, with a gentle drift back into the arena, instead of stopping it dead. The
    body stays in a line behind the head instead of piling into it.
@@ -466,8 +480,33 @@ after:   self-collision deaths   3   total deaths 229
 ```
 
 Self-collision deaths fell by 97 %, and cohorts that used to end after 30 seconds now
-run for minutes — the longest measured cohort survived **302 seconds** before the
+run for minutes — the longest measured cohort survived **263 seconds** before the
 chompers finished it.
+
+### Seeing the wall is not enough on its own
+
+With the wall visible but the head still pinned, the channel was worth only ~10 %:
+the policy could see the edge but not how fast it was closing on it. A worm coasting
+at 170 u/s and one drifting at 30 u/s produced an *identical* wall reading, even
+though the first has to turn immediately. The observation was missing the one
+quantity needed to act on the perception.
+
+Adding the worm's own **speed** and **spin rate** to the state closes that gap and
+makes the observation Markov with respect to the control-relevant dynamics. Paired
+across four seeds with an identical architecture and identical initial weights (the
+two channels are simply zeroed in the control arm):
+
+| | kinematics off | kinematics on |
+| --- | ---: | ---: |
+| Median last-6 cohort score | 4 680 | **4 866** |
+| Median last-6 cohort length | 156 s | **198 s** |
+| Wall-adjacent self-deaths | 31 | **23** |
+| Wall-adjacent deaths per second of arena time | 0.0026 | **0.0018** |
+
+A modest win rather than the unlock it looked like — because the slide fix had
+already removed the trap that made the perception matter. What the channels buy is a
+state that is actually sufficient: the policy can now work out its own closing speed
+and whether it is already turning away.
 
 ---
 

@@ -78,6 +78,7 @@ export const CONFIG = Object.freeze({
   },
   ppo: {
     hiddenSizes: [24, 24],
+    observeKinematics: true,
     gamma: 0.99,
     gaeLambda: 0.95,
     clipRatio: 0.2,
@@ -99,7 +100,8 @@ export const CONFIG = Object.freeze({
 });
 
 export const SENSOR_COUNT = 8 + 4 + 4 + 4 + 4 + 2 + 1 + 1;
-export const OBSERVATION_COUNT = SENSOR_COUNT + 2;
+export const KINEMATIC_COUNT = 2;
+export const OBSERVATION_COUNT = SENSOR_COUNT + KINEMATIC_COUNT + 2;
 
 export const WORM_PALETTE = [
   '#b9ff6a',

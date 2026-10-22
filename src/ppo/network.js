@@ -3,10 +3,11 @@ import { gaussian } from '../sim/random.js';
 
 const FOOD_LABELS = ['F', 'FL', 'L', 'BL', 'B', 'BR', 'R', 'FR'];
 const HAZARD_LABELS = ['H·F', 'H·L', 'H·B', 'H·R'];
-const WALL_LABELS = ['W·F', 'W·L', 'W·B', 'W·R'];
-const WORM_LABELS = ['W·F', 'W·L', 'W·B', 'W·R'];
+const WALL_LABELS = ['E·F', 'E·L', 'E·B', 'E·R'];
+const WORM_LABELS = ['R·F', 'R·L', 'R·B', 'R·R'];
 const CHOMPER_LABELS = ['C·F', 'C·L', 'C·B', 'C·R'];
 const SELF_LABELS = ['S·P', 'S·B'];
+const KINEMATIC_LABELS = ['V', 'Ω'];
 
 const HALF_LOG_TWO_PI = 0.9189385332046727;
 const HALF_LOG_TWO_PI_E = 1.4189385332046727;
@@ -75,6 +76,20 @@ function createInputLayout() {
   inputs.push({ kind: 'self', index: 1, label: SELF_LABELS[1], x: 0.74, y: 0.44 });
   inputs.push({ kind: 'energy', index: 0, label: 'E', x: 0, y: 0.21 });
   inputs.push({ kind: 'bias', index: 0, label: 'B', x: 0, y: -0.17 });
+  inputs.push({
+    kind: 'kinematic',
+    index: 0,
+    label: KINEMATIC_LABELS[0],
+    x: -0.26,
+    y: -0.52,
+  });
+  inputs.push({
+    kind: 'kinematic',
+    index: 1,
+    label: KINEMATIC_LABELS[1],
+    x: 0.26,
+    y: -0.52,
+  });
   inputs.push({ kind: 'drift', index: 0, label: 'D·X', x: -0.3, y: -0.46 });
   inputs.push({ kind: 'drift', index: 1, label: 'D·Y', x: 0.3, y: -0.46 });
   return inputs;

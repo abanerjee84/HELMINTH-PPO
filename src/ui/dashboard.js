@@ -55,6 +55,8 @@ function inputColor(kind) {
   if (kind === 'chomper') return '#ff9b71';
   if (kind === 'self') return '#c9a0ff';
   if (kind === 'energy') return '#ffc96b';
+  if (kind === 'kinematic') return '#5ee7f0';
+  if (kind === 'drift') return '#7f96a8';
   return '#85a99a';
 }
 

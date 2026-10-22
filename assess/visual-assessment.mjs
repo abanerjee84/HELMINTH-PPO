@@ -297,7 +297,7 @@ async function run() {
     );
     check(
       'actor-critic network is wired',
-      sensoryState.observation === 30 && sensoryState.hidden === 48,
+      sensoryState.observation === 32 && sensoryState.hidden === 48,
       `${sensoryState.observation} inputs, ${sensoryState.hidden} hidden units, ${sensoryState.weights} weights`,
     );
 

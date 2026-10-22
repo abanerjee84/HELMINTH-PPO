@@ -1,4 +1,4 @@
-import { CONFIG, OBSERVATION_COUNT, SENSOR_COUNT, WORLD } from '../config.js';
+import { CONFIG, KINEMATIC_COUNT, OBSERVATION_COUNT, SENSOR_COUNT, WORLD } from '../config.js';
 import { clamp, lerp } from './random.js';
 
 const FOOD_RAYS = 8;
@@ -321,8 +321,21 @@ export class Worm {
     for (let index = 0; index < SENSOR_COUNT; index += 1) {
       this.observation[index] = this.sensorValues[index];
     }
-    this.observation[SENSOR_COUNT] = this.identity[0];
-    this.observation[SENSOR_COUNT + 1] = this.identity[1];
+
+    // Kinematics. Every other channel is heading-relative, so without these
+    // the policy cannot tell "closing on the wall at 170" from "drifting at
+    // 30" - the same wall reading, completely different urgency.
+    const kinematics = this.config.ppo.observeKinematics;
+    this.observation[SENSOR_COUNT] = kinematics
+      ? clamp(this.speed / this.config.worm.maxSpeed, 0, 1)
+      : 0;
+    this.observation[SENSOR_COUNT + 1] = kinematics
+      ? clamp(this.angularVelocity / this.config.worm.turnRate, -1, 1)
+      : 0;
+
+    const driftBase = SENSOR_COUNT + KINEMATIC_COUNT;
+    this.observation[driftBase] = this.identity[0];
+    this.observation[driftBase + 1] = this.identity[1];
     return this.observation;
   }
 
