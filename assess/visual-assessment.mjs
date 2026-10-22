@@ -288,16 +288,16 @@ async function run() {
       };
     });
     check(
-      'worms sense food, rivals, chompers and their own body',
-      sensoryState.sensors === 24 &&
-        ['food', 'hazard', 'worm', 'chomper', 'self'].every((kind) =>
+      'worms sense food, walls, rivals, chompers and their own body',
+      sensoryState.sensors === 28 &&
+        ['food', 'hazard', 'wall', 'worm', 'chomper', 'self'].every((kind) =>
           sensoryState.kinds.includes(kind),
         ),
       `${sensoryState.sensors} sensors: ${sensoryState.kinds.join(', ')}`,
     );
     check(
       'actor-critic network is wired',
-      sensoryState.observation === 26 && sensoryState.hidden === 48,
+      sensoryState.observation === 30 && sensoryState.hidden === 48,
       `${sensoryState.observation} inputs, ${sensoryState.hidden} hidden units, ${sensoryState.weights} weights`,
     );
 

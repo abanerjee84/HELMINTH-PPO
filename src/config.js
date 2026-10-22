@@ -55,10 +55,12 @@ export const CONFIG = Object.freeze({
     speedDrain: 0.0045,
     foodSensorRange: 330,
     hazardSensorRange: 260,
+    wallSensorRange: 210,
     wormSensorRange: 300,
     chomperSensorRange: 300,
     bodyFriction: 18,
     straightnessWindow: 2.4,
+    wallDrift: 0.55,
     collision: {
       scale: 0.82,
       selfGuardSegments: 5,
@@ -96,7 +98,7 @@ export const CONFIG = Object.freeze({
   },
 });
 
-export const SENSOR_COUNT = 8 + 4 + 4 + 4 + 2 + 2;
+export const SENSOR_COUNT = 8 + 4 + 4 + 4 + 4 + 2 + 1 + 1;
 export const OBSERVATION_COUNT = SENSOR_COUNT + 2;
 
 export const WORM_PALETTE = [

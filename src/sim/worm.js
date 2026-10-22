@@ -3,10 +3,12 @@ import { clamp, lerp } from './random.js';
 
 const FOOD_RAYS = 8;
 const HAZARD_RAYS = 4;
+const WALL_RAYS = 4;
 const WORM_RAYS = 4;
 const CHOMPER_RAYS = 4;
 const SELF_RAYS = 2;
 const SENSOR_OFFSETS = [0, Math.PI / 2, Math.PI, -Math.PI / 2];
+const WALL_MARGIN = 26;
 const TWO_PI = Math.PI * 2;
 
 function wrapAngle(angle) {
@@ -136,6 +138,7 @@ export class Worm {
     } = this.config.worm;
     const foodSensors = new Array(FOOD_RAYS).fill(0);
     const hazardSensors = new Array(HAZARD_RAYS).fill(0);
+    const wallSensors = new Array(WALL_RAYS).fill(0);
     const wormSensors = new Array(WORM_RAYS).fill(0);
     const chomperSensors = new Array(CHOMPER_RAYS).fill(0);
     const selfSensors = new Array(SELF_RAYS).fill(0);
@@ -185,6 +188,28 @@ export class Worm {
             : Math.max(0, alignment) ** 2;
         hazardSensors[index] += directional * closeness * closeness;
       }
+    }
+
+    // The arena boundary is a hard edge: without these rays a worm only finds
+    // out about it by hitting it, and a pinned worm folds into its own body.
+    const wallRange = this.config.worm.wallSensorRange;
+    for (let index = 0; index < WALL_RAYS; index += 1) {
+      const direction = this.heading + SENSOR_OFFSETS[index];
+      const dx = Math.cos(direction);
+      const dy = Math.sin(direction);
+      let distance = Infinity;
+      if (dx > 1e-6) {
+        distance = Math.min(distance, (WORLD.width - WALL_MARGIN - this.x) / dx);
+      } else if (dx < -1e-6) {
+        distance = Math.min(distance, (WALL_MARGIN - this.x) / dx);
+      }
+      if (dy > 1e-6) {
+        distance = Math.min(distance, (WORLD.height - WALL_MARGIN - this.y) / dy);
+      } else if (dy < -1e-6) {
+        distance = Math.min(distance, (WALL_MARGIN - this.y) / dy);
+      }
+      if (!Number.isFinite(distance)) continue;
+      wallSensors[index] = clamp(1 - distance / wallRange, 0, 1);
     }
 
     for (const neighbor of neighbors) {
@@ -286,6 +311,7 @@ export class Worm {
     this.sensorValues = [
       ...foodSensors,
       ...hazardSensors,
+      ...wallSensors,
       ...wormSensors,
       ...chomperSensors,
       ...selfSensors,
@@ -365,8 +391,57 @@ export class Worm {
 
     const previousX = this.x;
     const previousY = this.y;
-    this.x += Math.cos(this.heading) * this.speed * dt;
-    this.y += Math.sin(this.heading) * this.speed * dt;
+    let nextX = this.x + Math.cos(this.heading) * this.speed * dt;
+    let nextY = this.y + Math.sin(this.heading) * this.speed * dt;
+
+    const margin = WALL_MARGIN;
+    let wallHit = false;
+    if (nextX < margin) {
+      nextX = margin;
+      wallHit = true;
+    } else if (nextX > WORLD.width - margin) {
+      nextX = WORLD.width - margin;
+      wallHit = true;
+    }
+    if (nextY < margin) {
+      nextY = margin;
+      wallHit = true;
+    } else if (nextY > WORLD.height - margin) {
+      nextY = WORLD.height - margin;
+      wallHit = true;
+    }
+
+    this.x = nextX;
+    this.y = nextY;
+
+    if (wallHit) {
+      this.wallHits += 1;
+      this.speed *= 0.55;
+      this.throttle *= 0.7;
+      // Slide along the boundary instead of stopping dead. A pinned head used
+      // to let the trailing body pile into it, which killed the worm with its
+      // own segments; sliding keeps the body in a line behind the head.
+      const slideX = this.x - previousX;
+      const slideY = this.y - previousY;
+      if (slideX * slideX + slideY * slideY > 1e-8) {
+        const slideHeading = Math.atan2(slideY, slideX);
+        const inward = Math.atan2(
+          WORLD.height * 0.5 - this.y,
+          WORLD.width * 0.5 - this.x,
+        );
+        const away = wrapAngle(inward - slideHeading);
+        // Keep sliding, but drift gently back into the arena.
+        this.heading = wrapAngle(
+          slideHeading + clamp(away, -0.35, 0.35) * this.config.worm.wallDrift,
+        );
+      } else {
+        this.heading = Math.atan2(
+          WORLD.height * 0.5 - this.y,
+          WORLD.width * 0.5 - this.x,
+        );
+      }
+    }
+
     const stepDistance = Math.hypot(this.x - previousX, this.y - previousY);
     this.distanceTravelled += stepDistance;
 
@@ -377,30 +452,6 @@ export class Worm {
     this.velocityY = lerp(this.velocityY, velocityY, blend);
     this.averageSpeed = lerp(this.averageSpeed, this.speed, blend);
     this.straightTravel += stepDistance * this.straightness;
-
-    const margin = 26;
-    let wallHit = false;
-    if (this.x < margin) {
-      this.x = margin;
-      wallHit = true;
-    } else if (this.x > WORLD.width - margin) {
-      this.x = WORLD.width - margin;
-      wallHit = true;
-    }
-    if (this.y < margin) {
-      this.y = margin;
-      wallHit = true;
-    } else if (this.y > WORLD.height - margin) {
-      this.y = WORLD.height - margin;
-      wallHit = true;
-    }
-
-    if (wallHit) {
-      this.wallHits += 1;
-      this.speed *= 0.5;
-      this.throttle *= 0.6;
-      this.heading = Math.atan2(WORLD.height * 0.5 - this.y, WORLD.width * 0.5 - this.x);
-    }
 
     const eaten = ecology.consumeFoodAt(
       this.x,

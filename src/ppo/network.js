@@ -3,6 +3,7 @@ import { gaussian } from '../sim/random.js';
 
 const FOOD_LABELS = ['F', 'FL', 'L', 'BL', 'B', 'BR', 'R', 'FR'];
 const HAZARD_LABELS = ['H·F', 'H·L', 'H·B', 'H·R'];
+const WALL_LABELS = ['W·F', 'W·L', 'W·B', 'W·R'];
 const WORM_LABELS = ['W·F', 'W·L', 'W·B', 'W·R'];
 const CHOMPER_LABELS = ['C·F', 'C·L', 'C·B', 'C·R'];
 const SELF_LABELS = ['S·P', 'S·B'];
@@ -37,6 +38,16 @@ function createInputLayout() {
       index,
       label: HAZARD_LABELS[index],
       ...ringPosition(angle, 0.56),
+    });
+  }
+
+  for (let index = 0; index < 4; index += 1) {
+    const angle = Math.PI / 2 + index * (Math.PI / 2);
+    inputs.push({
+      kind: 'wall',
+      index,
+      label: WALL_LABELS[index],
+      ...ringPosition(angle, 0.68),
     });
   }
 

@@ -50,6 +50,7 @@ function canvasSize(canvas, context) {
 function inputColor(kind) {
   if (kind === 'food') return '#b9ff68';
   if (kind === 'hazard') return '#ff6e9b';
+  if (kind === 'wall') return '#d9e4ee';
   if (kind === 'worm') return '#6bc8ff';
   if (kind === 'chomper') return '#ff9b71';
   if (kind === 'self') return '#c9a0ff';

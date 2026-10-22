@@ -31,6 +31,7 @@ no PyTorch, no TensorFlow, no ML dependency at all.
 - [The PPO update](#the-ppo-update)
 - [Does it actually learn?](#does-it-actually-learn)
 - [Two bugs worth reading about](#two-bugs-worth-reading-about)
+- [Can the worms see the wall?](#can-the-worms-see-the-wall)
 - [Multi-agent notes](#multi-agent-notes)
 - [The arena](#the-arena)
 - [The sensorium](#the-sensorium)
@@ -47,12 +48,13 @@ no PyTorch, no TensorFlow, no ML dependency at all.
 - **PPO from scratch** — Gaussian actor, separate value critic, clipped surrogate
   objective, clipped value loss, entropy bonus, global gradient-norm clipping, and
   Adam, all implemented on `Float32Array`s with hand-written forward and backward
-  passes. 2 573 parameters, ~110 ms for a full update.
+  passes. 2 765 parameters, ~110 ms for a full update.
 - **Parallel on-policy rollouts** — all ten worms are sampled in lockstep, so one
   policy update consumes a full cohort of trajectories. A cohort ends only when the
   last worm in it is dead.
-- **24-channel sensorium** — 8 food rays, 4 hazard rays, 4 rival-worm rays, 4 chomper
-  rays, 2 self-body rays, energy, and bias, plus a 2-channel per-worm drift vector.
+- **28-channel sensorium** — 8 food rays, 4 hazard rays, 4 wall rays, 4 rival-worm
+  rays, 4 chomper rays, 2 self-body rays, energy, and bias, plus a 2-channel per-worm
+  drift vector.
 - **Body-aware worms** — 15-segment bodies, self-collision, worm-to-worm collision,
   wall response, and lethal energy loss.
 - **Chomper patrol** — three predators that wander, chase, lunge, bite, digest, and
@@ -140,7 +142,7 @@ live in `docs/screenshots/`.
 
 ```mermaid
 flowchart LR
-    A["Sense<br/>24 sensors + drift"] --> B["Act<br/>actor samples a motor command"]
+    A["Sense<br/>28 sensors + drift"] --> B["Act<br/>actor samples a motor command"]
     B --> C["Move<br/>steering, thrust, body, energy"]
     C --> D["Interact<br/>food, toxins, chompers, bodies"]
     D --> E["Reward<br/>delta of the fitness terms"]
@@ -150,14 +152,15 @@ flowchart LR
     H --> I["Next cohort<br/>same arena, better policy"]
 ```
 
-1. **Sense.** Each living worm samples the 24-channel sensorium and appends its own
+1. **Sense.** Each living worm samples the 28-channel sensorium and appends its own
    drift vector.
 2. **Act.** The shared actor emits a Gaussian mean; the policy samples a
    two-dimensional motor command (`turn`, `thrust`).
 3. **Move.** Steering, thrust, speed, body joints, wall contact, and energy drain
    update at a fixed 60 Hz simulation step.
-4. **Interact.** Food is consumed, toxic blooms damage worms, worm bodies collide, and
-   chompers bite.
+4. **Interact.** Food is consumed, toxic blooms damage worms, worm bodies collide,
+   chompers bite, and a wall hit slides the worm along the boundary instead of
+   pinning it.
 5. **Reward.** The step reward is the exact delta of the fitness terms below, so the
    credit a worm receives is the credit the scorecard shows.
 6. **Store.** Every transition lands in the rollout buffer. A worm that dies ends its
@@ -181,12 +184,12 @@ The consequence is visible in the data: an untrained policy loses its wave in ab
 
 | | |
 | --- | --- |
-| Actor | `26 → 24 → 24 → 2`, tanh hidden layers, linear output |
-| Critic | `26 → 24 → 24 → 1`, a **separate** network so a bad value estimate can never poison the policy gradient |
-| Parameters | 1 298 actor + 1 273 critic + 2 log-std = **2 573** |
+| Actor | `30 → 24 → 24 → 2`, tanh hidden layers, linear output |
+| Critic | `30 → 24 → 24 → 1`, a **separate** network so a bad value estimate can never poison the policy gradient |
+| Parameters | 1 394 actor + 1 369 critic + 2 log-std = **2 765** |
 | Action distribution | Diagonal Gaussian with a state-independent log-std |
 | Motor mapping | `turn = tanh(1.8·u₀)`, `thrust = σ(2.2·u₁)` |
-| Observation | 24 sensors (all in `[0, 1]`) + a 2-channel drift vector |
+| Observation | 28 sensors (all in `[0, 1]`) + a 2-channel drift vector |
 
 **The 26th and 27th channels matter.** A single policy driving ten worms makes the
 cohort behave like one body: identical headings, mutual collisions, and a lot of
@@ -258,18 +261,19 @@ instead of blocking the render loop for 110 ms.
 
 ## Does it actually learn?
 
-Measured over a single 400 000-step run (105 cohorts, one fixed arena):
+Measured over a single 400 000-step run (55 cohorts, one fixed arena):
 
 | Metric | First 6 cohorts | Middle 6 | Last 6 | Change |
 | --- | ---: | ---: | ---: | ---: |
-| Mean cohort fitness | 606 | 631 | 2 986 | **+393%** |
-| Best single cohort | — | — | 24 930 | — |
-| Cohort length (seconds alive) | 33 / 37 / 31 / 20 / 34 | — | 60 / 63 / 84 / 39 / 172 | **+170%** |
+| Mean cohort fitness | 1 350 | 1 221 | 4 338 | **+221%** |
+| Mean cohort length (seconds alive) | 73 s | 61 s | 172 s | **+136%** |
+| Best single cohort | — | — | 38 671 | — |
+| Longest single cohort | — | — | 302 s | — |
 
 The second row is the one that matters most: a cohort is only scored once it has
 been *wiped out*, so the score measures how long the policy kept its worms alive
 against a hostile arena. The last cohorts survive more than twice as long as the
-first ones, and the best single cohort scored 24 930.
+first ones, and the best single cohort scored 38 671 across five minutes of survival.
 
 The same build, before the policy gradient was corrected, *degraded* instead of
 improving — the policy learned to stop foraging and die within seconds. That failure
@@ -361,7 +365,9 @@ comparable to the one before it:
 - **10 worms** that start at evenly spaced positions — at least 150 units apart, clear
   of toxic pockets, and kept well away from chomper patrol routes.
 
-Worms start with 58 energy, drain 1.15/s plus a speed term, and cap at 100.
+Worms start with 58 energy, drain 1.15/s plus a speed term, and cap at 100. The
+boundary is 26 units from the edge of the field; a worm that reaches it slides along
+it and drifts back into the arena rather than stopping dead.
 
 ---
 
@@ -371,6 +377,7 @@ Worms start with 58 energy, drain 1.15/s plus a speed term, and cap at 100.
 | --- | ---: | --- | --- |
 | Food | 8 | 330 | Directional alignment and closeness to active nutrient blooms |
 | Hazard | 4 | 260 | Toxic-pocket proximity, with a stronger signal inside the bloom |
+| Wall | 4 | 210 | Distance to the arena boundary along the front, left, back and right rays |
 | Rival worm | 4 | 300 | Direction and closeness to the nearest point on another worm's body |
 | Chomper | 4 | 300 | Direction and closeness to a chomper, boosted by chase excitement and active chomping |
 | Self body | 2 | — | How tightly the head is folded against its own trailing segments, and which side that body lies on |
@@ -378,9 +385,9 @@ Worms start with 58 energy, drain 1.15/s plus a speed term, and cap at 100.
 | Bias | 1 | — | Constant `1` |
 | Drift | 2 | — | A per-worm random unit vector, re-rolled each cohort |
 
-Food uses eight rays around the heading. Hazard, rival, and chomper channels each use
-four rays. Rival sensing samples the nearest *body segment* rather than only the
-other worm's head, so body contact is represented too. The two self channels let a
+Food uses eight rays around the heading. Hazard, wall, rival, and chomper channels
+each use four rays. Rival sensing samples the nearest *body segment* rather than only
+the other worm's head, so body contact is represented too. The two self channels let a
 worm feel its own body: one reports how far the head has folded back onto its
 trailing segments, the other reports which side that body lies on, so a coil can be
 unwound before it becomes a lethal self-collision.
@@ -411,6 +418,56 @@ earns travel credit in proportion to how straight the worm has been moving, so a
 straight sprint is worth far more per unit than a tight circle. Together these three
 terms make circling unprofitable — a worm that loops in place earns neither travel
 nor forward credit and pays for every radian it turns.
+
+---
+
+## Can the worms see the wall?
+
+They could not, and the arena was quietly killing them for it.
+
+The first build had no wall channel at all. A boundary was felt only *after* contact:
+the head was clamped, the speed halved, and the heading snapped toward the arena
+centre. Nothing in the observation said "the edge is over there", so the policy
+learned to hug walls and then die there.
+
+The tell was in the death census:
+
+```
+collision:        168 (45.4%)   rival worm bodies
+self-collision:   117 (31.6%)   ← 115 of these within 40 units of a wall
+predation:         47 (12.7%)
+toxicosis:         29 (7.8%)
+starvation:         9 (2.4%)
+direct 'wall' deaths: 0
+```
+
+The wall never killed anything by itself. What happened is worse: a worm grazed the
+boundary, the head was pinned against it, the trailing body kept advancing into the
+pinned head, and the worm folded onto itself. **98 % of wall-adjacent self-collisions
+happened within one second of a wall hit** — the wall was the trigger, not the
+location.
+
+Two changes fixed it:
+
+1. **A wall channel.** Four heading-relative rays (front, left, back, right) report
+   the distance to the boundary within 210 units, so the policy can see the edge
+   before it touches it. This is worth roughly 10 % of the final cohort score once
+   the trap below is gone (paired across four seeds, it wins 3/4 on both score and
+   survival time).
+2. **A slide instead of a pin.** A wall hit now redirects the head along the boundary
+   tangent, with a gentle drift back into the arena, instead of stopping it dead. The
+   body stays in a line behind the head instead of piling into it.
+
+The second change is the one that matters:
+
+```
+before:  self-collision deaths 117   total deaths 370
+after:   self-collision deaths   3   total deaths 229
+```
+
+Self-collision deaths fell by 97 %, and cohorts that used to end after 30 seconds now
+run for minutes — the longest measured cohort survived **302 seconds** before the
+chompers finished it.
 
 ---
 
@@ -466,7 +523,7 @@ docs/screenshots/      Curated README images
 
 - WebGL arena geometry and visible motion;
 - three active chompers;
-- 24 sensors with food, hazard, worm, chomper, and self-body channels;
+- 28 sensors with food, hazard, wall, worm, chomper, and self-body channels;
 - a PPO update running on the collected rollout, with finite telemetry;
 - policy weights actually changing under the optimizer;
 - cohort scoring and advancement to the next cohort;
