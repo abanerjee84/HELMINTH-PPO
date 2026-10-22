@@ -49,7 +49,8 @@ no PyTorch, no TensorFlow, no ML dependency at all.
   Adam, all implemented on `Float32Array`s with hand-written forward and backward
   passes. 2 573 parameters, ~110 ms for a full update.
 - **Parallel on-policy rollouts** — all ten worms are sampled in lockstep, so one
-  policy update consumes a full cohort of 2 560 trajectories.
+  policy update consumes a full cohort of trajectories. A cohort ends only when the
+  last worm in it is dead.
 - **24-channel sensorium** — 8 food rays, 4 hazard rays, 4 rival-worm rays, 4 chomper
   rays, 2 self-body rays, energy, and bias, plus a 2-channel per-worm drift vector.
 - **Body-aware worms** — 15-segment bodies, self-collision, worm-to-worm collision,
@@ -160,14 +161,19 @@ flowchart LR
 5. **Reward.** The step reward is the exact delta of the fitness terms below, so the
    credit a worm receives is the credit the scorecard shows.
 6. **Store.** Every transition lands in the rollout buffer. A worm that dies ends its
-   own trajectory (bootstrapping with zero) and is replaced by a fresh one.
-7. **Learn.** When the rollout fills (256 steps) or the cohort hits its cap, GAE turns
-   the buffer into advantages and four epochs of clipped minibatches rewrite the actor
-   and the critic.
+   own trajectory (bootstrapping with zero).
+7. **Learn.** When the rollout fills (256 steps), GAE turns the buffer into advantages
+   and four epochs of clipped minibatches rewrite the actor and the critic.
 
-A cohort ends on the 45-second cap. The next cohort starts from the same arena with
-the improved policy. The arena never freezes during an update: the optimization is
-spread across frames on a millisecond budget while the worms keep swimming.
+**A cohort ends when the last worm in it is dead.** There is no timer: a single
+survivor keeps the cohort alive, so a cohort score always means "this wave was
+wiped out", never "we stopped watching while they were still swimming". The next
+cohort spawns into the same arena with the improved policy, and the arena never
+freezes during an update — the optimization is spread across frames on a millisecond
+budget while the worms keep swimming.
+
+The consequence is visible in the data: an untrained policy loses its wave in about
+30 seconds, while a trained one holds on for two minutes.
 
 ---
 
@@ -252,12 +258,18 @@ instead of blocking the render loop for 110 ms.
 
 ## Does it actually learn?
 
-Measured over a single 400 000-step run (138 cohorts, one fixed arena):
+Measured over a single 400 000-step run (105 cohorts, one fixed arena):
 
 | Metric | First 6 cohorts | Middle 6 | Last 6 | Change |
 | --- | ---: | ---: | ---: | ---: |
-| Mean cohort fitness | 2 905 | 8 046 | 8 717 | **+200%** |
-| Best single cohort | — | — | 11 269 | — |
+| Mean cohort fitness | 606 | 631 | 2 986 | **+393%** |
+| Best single cohort | — | — | 24 930 | — |
+| Cohort length (seconds alive) | 33 / 37 / 31 / 20 / 34 | — | 60 / 63 / 84 / 39 / 172 | **+170%** |
+
+The second row is the one that matters most: a cohort is only scored once it has
+been *wiped out*, so the score measures how long the policy kept its worms alive
+against a hostile arena. The last cohorts survive more than twice as long as the
+first ones, and the best single cohort scored 24 930.
 
 The same build, before the policy gradient was corrected, *degraded* instead of
 improving — the policy learned to stop foraging and die within seconds. That failure
@@ -323,20 +335,17 @@ replaced the genome with one shared policy. Every worm then faced the arena with
 same heading policy, so they converged on the arena centre, folded into their own
 tails, and collided. Roughly 77 % of all deaths were body collisions.
 
-Three changes fixed it:
+Two changes fixed it:
 
 1. **Per-worm action noise.** Each worm draws its motor command from its own RNG
    stream, so identical weights do not mean identical trajectories.
 2. **A per-worm drift vector** in the observation, which breaks the symmetry
    *systematically* rather than stochastically.
-3. **Respawn on death.** The cohort became a continuous task: a fallen worm is
-   replaced at a clear spawn point, its previous episode is banked into the
-   leaderboard score, and the rollout stays dense. Before this change the population
-   wiped out in about eight seconds, the arena sat empty, and the app spent most of
-   its time in the intermission with nothing on screen.
 
-The arena now stays populated, and every one of the ten slots contributes a full
-trajectory to every policy update.
+A third change — replacing fallen worms mid-cohort — was tried and then removed: it
+kept the arena populated, but it made extinction impossible, and with it the meaning
+of a cohort score. A cohort is now a wave: it is scored when the last worm in it is
+dead, and a single survivor keeps it running.
 
 ---
 
@@ -432,7 +441,7 @@ src/
     rollout.js         Parallel rollout buffer, GAE, return statistics
     optim.js           Adam with global gradient-norm clipping
     ppo.js             Clipped surrogate, clipped value loss, entropy, minibatch updates
-    trainer.js         Cohort lifecycle, rollout collection, update scheduling, respawns
+    trainer.js         Cohort lifecycle, rollout collection, update scheduling
   sim/
     worm.js            Sensors, policy actions, movement, energy, bites, step reward
     predators.js       Chomper pack, chase/lunge/chomp state machine
@@ -461,7 +470,7 @@ docs/screenshots/      Curated README images
 - a PPO update running on the collected rollout, with finite telemetry;
 - policy weights actually changing under the optimizer;
 - cohort scoring and advancement to the next cohort;
-- cohort termination on the 45-second cap;
+- cohort termination on extinction — never on a timer with worms still alive;
 - pause/resume behavior;
 - rendered fitness trace;
 - 1440×900 compact layout with no clipped panels or page overflow;

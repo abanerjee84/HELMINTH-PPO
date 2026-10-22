@@ -316,9 +316,9 @@ async function run() {
       `history=${scoredState.history.length}, best=${Math.round(scoredState.history[0]?.best ?? 0)}`,
     );
     check(
-      'cohort ends on extinction or the time cap',
-      scoredState.alive === 0 || scoredState.elapsed >= scoredState.maxCohortSeconds,
-      `${scoredState.alive} worms alive at intermission, elapsed=${scoredState.elapsed.toFixed(1)}s of ${scoredState.maxCohortSeconds}s cap`,
+      'cohort ends only when the last worm is dead',
+      scoredState.alive === 0,
+      `${scoredState.alive} worms alive at intermission, elapsed=${scoredState.elapsed.toFixed(1)}s`,
     );
 
     await page.waitForFunction(
@@ -337,6 +337,11 @@ async function run() {
       `cohort=${generationTwoState.generation}, iterations=${generationTwoState.iteration}, history=${generationTwoState.history.length}`,
     );
 
+    await page.waitForFunction(
+      () => window.__HELMINTH__.getState().phase === 'running',
+      null,
+      { timeout: 30_000 },
+    );
     await startButton.click();
     await page.waitForFunction(() => window.__HELMINTH__.getState().running === false);
     await page.waitForTimeout(260);

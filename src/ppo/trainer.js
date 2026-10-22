@@ -28,7 +28,6 @@ export class Trainer {
   reset() {
     this.seedRng = mulberry32(this.config.seed);
     this.policyRng = mulberry32(this.config.seed ^ 0x9e3779b9);
-    this.respawnRng = mulberry32(this.config.seed ^ 0x85ebca6b);
     this.ppo = new PPO(this.config, this.policyRng);
     this.network = describeNetwork(this.ppo.policy.actor);
     this.phase = 'ready';
@@ -215,8 +214,6 @@ export class Trainer {
       }
     }
 
-    this.respawnFallen();
-
     this.ranking = [...this.agents].sort(
       (a, b) => b.worm.fitness - a.worm.fitness || a.index - b.index,
     );
@@ -225,8 +222,7 @@ export class Trainer {
       0,
     );
 
-    const cohortDone =
-      this.timeAlive === 0 || this.elapsed >= this.config.cohortSeconds;
+    const cohortDone = this.cohortFinished();
 
     if (!collecting) {
       if (cohortDone) this.cohortEnded = true;
@@ -242,42 +238,12 @@ export class Trainer {
   }
 
   /**
-   * Puts a dead worm back into the arena. A cohort is a continuous task: the
-   * policy keeps improving while the population keeps turning over.
+   * A cohort is a wave: it ends when the last worm in it is dead, and the
+   * next wave spawns into the same arena with the improved policy. A single
+   * survivor keeps the cohort alive.
    */
-  respawnFallen() {
-    for (const agent of this.agents) {
-      const worm = agent.worm;
-      if (worm.alive) continue;
-      const points = this.ecology.spawnPoints;
-      let best = points[0];
-      let bestDistance = -1;
-      for (let attempt = 0; attempt < 6; attempt += 1) {
-        const point = points[Math.floor(this.respawnRng() * points.length)];
-        let nearest = Infinity;
-        for (const other of this.agents) {
-          if (other === agent || !other.worm.alive) continue;
-          const dx = other.worm.x - point.x;
-          const dy = other.worm.y - point.y;
-          nearest = Math.min(nearest, Math.sqrt(dx * dx + dy * dy));
-        }
-        if (nearest > bestDistance) {
-          bestDistance = nearest;
-          best = point;
-        }
-      }
-      worm.respawn({
-        x: best.x,
-        y: best.y,
-        heading: this.respawnRng() * Math.PI * 2,
-      });
-      this.events.push({
-        type: 'spawn',
-        x: worm.x,
-        y: worm.y,
-        color: worm.color,
-      });
-    }
+  cohortFinished() {
+    return this.timeAlive === 0;
   }
 
   /** Turns the collected rollout into advantages and queues a policy update. */
@@ -336,8 +302,8 @@ export class Trainer {
       generation: this.generation,
       best: this.champion.worm.fitness,
       average,
-      foodEaten: this.champion.worm.totalFood,
-      timeAlive: this.champion.worm.lifetime,
+      foodEaten: this.champion.worm.foodEaten,
+      timeAlive: this.champion.worm.age,
       color: this.champion.color,
       iteration: this.iteration,
       policyLoss: this.ppo.stats.policyLoss,

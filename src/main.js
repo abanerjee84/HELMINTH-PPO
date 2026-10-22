@@ -120,7 +120,6 @@ window.__HELMINTH__ = {
     alive: trainer.aliveCount,
     chompers: trainer.predators?.chompers.length ?? 0,
     history: trainer.history,
-    maxCohortSeconds: CONFIG.cohortSeconds,
     ppo: trainer.ppo.stats,
     parameterChecksum: trainer.ppo.parameterChecksum,
   }),

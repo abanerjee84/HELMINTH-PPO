@@ -52,13 +52,6 @@ export class Worm {
     this.collisionHits = 0;
     this.selfCollisionHits = 0;
     this.otherCollisionHits = 0;
-    this.bankedFitness = 0;
-    this.episodes = 0;
-    this.deaths = 0;
-    this.lifetime = 0;
-    this.totalFood = 0;
-    this.totalDistance = 0;
-    this.totalStraight = 0;
 
     this.velocityX = Math.cos(heading) * config.worm.minSpeed;
     this.velocityY = Math.sin(heading) * config.worm.minSpeed;
@@ -117,10 +110,6 @@ export class Worm {
   }
 
   get fitness() {
-    return this.bankedFitness + Math.max(0, this.rawFitness);
-  }
-
-  get episodeFitness() {
     return Math.max(0, this.rawFitness);
   }
 
@@ -342,58 +331,6 @@ export class Worm {
     return energyDelta - (f.deathPenalty ?? 0);
   }
 
-  /**
-   * Starts a fresh life in the same cohort. The previous episode is banked so
-   * the leaderboard still ranks a worm by everything it achieved.
-   */
-  respawn({ x, y, heading }) {
-    const { segments, spacing, minSpeed, startEnergy, maxEnergy } = this.config.worm;
-    this.bankedFitness += Math.max(0, this.rawFitness);
-    this.episodes += 1;
-    this.deaths += 1;
-
-    this.x = x;
-    this.y = y;
-    this.spawnX = x;
-    this.spawnY = y;
-    this.heading = heading;
-    this.speed = minSpeed;
-    this.steering = 0;
-    this.throttle = 0.45;
-    this.angularVelocity = 0;
-    this.energy = startEnergy;
-    this.maxEnergy = maxEnergy;
-    this.age = 0;
-    this.alive = true;
-    this.deathCause = null;
-    this.foodEaten = 0;
-    this.foodEnergy = 0;
-    this.distanceTravelled = 0;
-    this.straightTravel = 0;
-    this.radiansTurned = 0;
-    this.hazardTime = 0;
-    this.predatorHits = 0;
-    this.biteFlash = 0;
-    this.wallHits = 0;
-    this.ateRecently = 0;
-    this.collisionHits = 0;
-    this.selfCollisionHits = 0;
-    this.otherCollisionHits = 0;
-    this.velocityX = Math.cos(heading) * minSpeed;
-    this.velocityY = Math.sin(heading) * minSpeed;
-    this.averageSpeed = minSpeed;
-    this.terminalSettled = false;
-    this.accountedEnergy = this.energy;
-    this.stepReward = 0;
-    this.body = Array.from({ length: segments }, (_, segment) => ({
-      x: x - Math.cos(heading) * spacing * segment,
-      y: y - Math.sin(heading) * spacing * segment,
-    }));
-    this.trail = [{ x, y }];
-    this.trailClock = 0;
-    this.bodyClock = 0;
-  }
-
   step(dt, ecology) {
     if (!this.alive) return null;
 
@@ -407,7 +344,7 @@ export class Worm {
     const previousEnergy = this.accountedEnergy;
 
     this.age += dt;
-    this.lifetime += dt;
+
     this.biteFlash = Math.max(0, this.biteFlash - dt * 3.4);
 
     const steeringTarget = this.outputs.turn;
@@ -432,7 +369,6 @@ export class Worm {
     this.y += Math.sin(this.heading) * this.speed * dt;
     const stepDistance = Math.hypot(this.x - previousX, this.y - previousY);
     this.distanceTravelled += stepDistance;
-    this.totalDistance += stepDistance;
 
     const velocityX = (this.x - previousX) / dt;
     const velocityY = (this.y - previousY) / dt;
@@ -441,7 +377,6 @@ export class Worm {
     this.velocityY = lerp(this.velocityY, velocityY, blend);
     this.averageSpeed = lerp(this.averageSpeed, this.speed, blend);
     this.straightTravel += stepDistance * this.straightness;
-    this.totalStraight += stepDistance * this.straightness;
 
     const margin = 26;
     let wallHit = false;
@@ -475,7 +410,6 @@ export class Worm {
     let foodEvent = null;
     if (eaten) {
       this.foodEaten += 1;
-      this.totalFood += 1;
       this.foodEnergy += this.config.food.energy;
       this.energy = Math.min(this.maxEnergy, this.energy + this.config.food.energy);
       this.ateRecently = 1;

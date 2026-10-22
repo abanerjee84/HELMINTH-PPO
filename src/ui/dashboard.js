@@ -283,15 +283,15 @@ export class Dashboard {
         ).padStart(2, '0')}`,
       );
       this.setText(this.leaderScore, formatInteger(worm.fitness));
-      this.setText(this.leaderFood, String(worm.totalFood));
-      this.setText(this.leaderForward, formatInteger(worm.totalDistance));
+      this.setText(this.leaderFood, String(worm.foodEaten));
+      this.setText(this.leaderForward, formatInteger(worm.forwardProgress));
       this.setText(
         this.leaderStraight,
         `${Math.round(
-          (worm.totalStraight / Math.max(1, worm.totalDistance)) * 100,
+          (worm.straightTravel / Math.max(1, worm.distanceTravelled)) * 100,
         )}%`,
       );
-      this.setText(this.leaderTime, `${worm.lifetime.toFixed(0)}s`);
+      this.setText(this.leaderTime, `${worm.age.toFixed(0)}s`);
       const energyPercent = Math.round((worm.energy / worm.maxEnergy) * 100);
       this.setText(this.leaderEnergy, `${energyPercent}%`);
       this.leaderEnergyBar.style.width = `${energyPercent}%`;
@@ -347,8 +347,8 @@ export class Dashboard {
           <div class="standing-row" style="--row-agent:${agent.color}">
             <span class="standing-rank">${String(index + 2).padStart(2, '0')}</span>
             <span class="standing-swatch"></span>
-            <span class="standing-name">W-${String(agent.index).padStart(2, '0')}<small>${agent.worm.totalFood} NUT</small></span>
-            <span class="standing-food">${agent.worm.lifetime.toFixed(0)}s</span>
+            <span class="standing-name">W-${String(agent.index).padStart(2, '0')}<small>${agent.worm.foodEaten} NUT</small></span>
+            <span class="standing-food">${agent.worm.age.toFixed(0)}s</span>
             <span class="standing-score">${formatInteger(agent.worm.fitness)}</span>
           </div>
         `,

@@ -8,7 +8,6 @@ export const STEP = 1 / 60;
 
 export const CONFIG = Object.freeze({
   seed: 4217,
-  cohortSeconds: 45,
   populationSize: 10,
   food: {
     count: 120,
