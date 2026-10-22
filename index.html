@@ -70,7 +70,7 @@
             <h2>Teach a worm<br /><em>to want tomorrow.</em></h2>
             <p class="lede">
               Ten sensory worms share one policy, reading food, rival and
-              chomper cues while dodging three tiny chompers. Every rollout is
+              chomper cues while dodging ten tiny chompers. Every rollout is
               scored, and the gradient is clipped back into the policy.
             </p>
 
@@ -118,6 +118,27 @@
                 </svg>
                 <span>Reset</span>
               </button>
+            </div>
+
+            <div class="control-strip predator-strip">
+              <div class="speed-control" aria-label="Chomper count">
+                <span>PREDATORS</span>
+                <div class="stepper">
+                  <button type="button" data-predator-step="-1" aria-label="Fewer chompers">−</button>
+                  <input
+                    id="predatorCount"
+                    data-testid="predator-count"
+                    type="number"
+                    min="0"
+                    max="24"
+                    step="1"
+                    value="10"
+                    aria-label="Number of chompers in the arena"
+                  />
+                  <button type="button" data-predator-step="1" aria-label="More chompers">+</button>
+                </div>
+              </div>
+              <span class="strip-note" id="predatorNote">10 chompers hunting</span>
             </div>
 
             <div class="panel-foot">

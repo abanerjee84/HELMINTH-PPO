@@ -115,6 +115,8 @@ export class Dashboard {
     this.thrustValue = document.getElementById('thrustValue');
     this.turnFill = document.getElementById('turnFill');
     this.thrustFill = document.getElementById('thrustFill');
+    this.predatorInput = document.getElementById('predatorCount');
+    this.predatorNote = document.getElementById('predatorNote');
     this.aliveTotal = document.getElementById('aliveTotal');
     this.idlePopulation = document.getElementById('idlePopulation');
 
@@ -168,6 +170,48 @@ export class Dashboard {
   bindActions({ onStart, onReset }) {
     this.startButton.addEventListener('click', onStart);
     this.resetButton.addEventListener('click', onReset);
+  }
+
+  /**
+   * Binds the chomper count input. The value is committed on change and on
+   * Enter, and the stepper buttons nudge it by one.
+   */
+  bindPredatorCount(handler) {
+    if (!this.predatorInput) return;
+    const commit = () => {
+      const value = Number.parseInt(this.predatorInput.value, 10);
+      const applied = Number.isFinite(value) ? handler(value) : handler(0);
+      this.predatorInput.value = String(applied);
+      this.setText(
+        this.predatorNote,
+        `${applied} ${applied === 1 ? 'chomper' : 'chompers'} hunting`,
+      );
+    };
+    this.predatorInput.addEventListener('change', commit);
+    this.predatorInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        commit();
+        this.predatorInput.blur();
+      }
+    });
+    document.querySelectorAll('[data-predator-step]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const step = Number(button.dataset.predatorStep);
+        const current = Number.parseInt(this.predatorInput.value, 10) || 0;
+        this.predatorInput.value = String(current + step);
+        commit();
+      });
+    });
+    this.predatorCommit = commit;
+  }
+
+  setPredatorCount(count) {
+    if (this.predatorInput) this.predatorInput.value = String(count);
+    this.setText(
+      this.predatorNote,
+      `${count} ${count === 1 ? 'chomper' : 'chompers'} hunting`,
+    );
   }
 
   update(trainer, state, now = performance.now()) {

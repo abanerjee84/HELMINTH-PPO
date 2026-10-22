@@ -29,7 +29,8 @@ export const CONFIG = Object.freeze({
     damagePerSecond: 27,
   },
   predators: {
-    count: 3,
+    count: 10,
+    maxCount: 24,
     radius: 16,
     speed: 78,
     lungeSpeed: 126,

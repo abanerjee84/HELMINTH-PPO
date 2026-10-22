@@ -12,6 +12,7 @@ const dashboard = new Dashboard();
 const renderer = new ArenaRenderer(host);
 
 let trainer = new Trainer(CONFIG);
+let predatorCount = trainer.predatorCount;
 let running = false;
 let speed = 4;
 let accumulator = 0;
@@ -36,10 +37,12 @@ function toggleRunning() {
 
 function resetRun() {
   trainer = new Trainer(CONFIG);
+  trainer.setPredatorCount(predatorCount);
   running = false;
   accumulator = 0;
   intermissionTimer = 0;
   dashboard.resetState();
+  dashboard.setPredatorCount(trainer.predatorCount);
   renderer.populationSource = null;
   renderer.ecologySource = null;
   renderer.predatorSource = null;
@@ -53,7 +56,12 @@ function setSpeed(value) {
 
 dashboard.bindSpeed(setSpeed);
 dashboard.bindActions({ onStart: toggleRunning, onReset: resetRun });
+dashboard.bindPredatorCount((count) => {
+  predatorCount = trainer.setPredatorCount(count);
+  return predatorCount;
+});
 dashboard.setSpeed(speed);
+dashboard.setPredatorCount(trainer.predatorCount);
 
 function simulate(realDelta) {
   if (!running) {

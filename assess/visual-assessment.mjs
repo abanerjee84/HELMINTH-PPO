@@ -245,10 +245,32 @@ async function run() {
       stateWhileRunning.simulatedSeconds > 2 || stateWhileRunning.iteration > 0,
       `simulated=${stateWhileRunning.simulatedSeconds.toFixed(1)}s at ${stateWhileRunning.iteration} policy iteration(s)`,
     );
+    const predatorInput = page.locator('[data-testid="predator-count"]');
+    const predatorValue = Number(await predatorInput.inputValue());
     check(
-      'chomper patrol is present',
-      stateWhileRunning.chompers === 3,
-      `${stateWhileRunning.chompers} chompers active`,
+      'chomper patrol matches the panel control',
+      stateWhileRunning.chompers === predatorValue && predatorValue === 10,
+      `${stateWhileRunning.chompers} chompers active, panel says ${predatorValue}`,
+    );
+
+    await predatorInput.fill('4');
+    await predatorInput.press('Enter');
+    await page.waitForFunction(
+      () => window.__HELMINTH__.getState().chompers === 4,
+      null,
+      { timeout: 10_000 },
+    );
+    check(
+      'the panel control rebuilds the patrol',
+      (await predatorInput.inputValue()) === '4',
+      `4 chompers after the change, panel reads ${await predatorInput.inputValue()}`,
+    );
+    await predatorInput.fill('10');
+    await predatorInput.press('Enter');
+    await page.waitForFunction(
+      () => window.__HELMINTH__.getState().chompers === 10,
+      null,
+      { timeout: 10_000 },
     );
     check(
       'ppo update runs on the collected rollout',
@@ -262,10 +284,13 @@ async function run() {
 
     const checksumBefore = stateWhileRunning.parameterChecksum;
     const iterationBefore = stateWhileRunning.iteration;
+    // Wait for two full iterations: the update's weights are applied in the
+    // frame before the iteration counter advances, so a single iteration can
+    // be sampled on both sides of the change.
     await page.waitForFunction(
-      (previous) => window.__HELMINTH__.getState().iteration > previous,
+      (previous) => window.__HELMINTH__.getState().iteration > previous + 1,
       iterationBefore,
-      { timeout: 30_000 },
+      { timeout: 60_000 },
     );
     const checksumAfter = await page.evaluate(
       () => window.__HELMINTH__.getState().parameterChecksum,

@@ -28,6 +28,7 @@ export class Trainer {
   reset() {
     this.seedRng = mulberry32(this.config.seed);
     this.policyRng = mulberry32(this.config.seed ^ 0x9e3779b9);
+    this.predatorCount = this.config.predators.count;
     this.ppo = new PPO(this.config, this.policyRng);
     this.network = describeNetwork(this.ppo.policy.actor);
     this.phase = 'ready';
@@ -62,7 +63,7 @@ export class Trainer {
     const seed = this.config.seed;
     const spawnRng = mulberry32((seed ^ (this.generation * 2654435761)) >>> 0);
     this.ecology = new Ecology(seed, this.config);
-    this.predators = new ChomperPack(seed + 131, this.config, this.ecology);
+    this.predators = new ChomperPack(seed + 131, this.predatorConfig(), this.ecology);
     this.ecology.relocateSpawnPointsAwayFrom(this.predators.chompers);
 
     this.agents = Array.from(
@@ -244,6 +245,35 @@ export class Trainer {
    */
   cohortFinished() {
     return this.timeAlive === 0;
+  }
+
+  /** The pack settings with the operator's live chomper count applied. */
+  predatorConfig() {
+    return {
+      ...this.config,
+      predators: { ...this.config.predators, count: this.predatorCount },
+    };
+  }
+
+  /**
+   * Rebuilds the patrol with a new number of chompers. The pack is replaced
+   * in place so the change is visible immediately, without a reset.
+   */
+  setPredatorCount(count) {
+    const max = this.config.predators.maxCount ?? 24;
+    const clamped = Math.max(0, Math.min(max, Math.round(Number(count) || 0)));
+    if (clamped === this.predatorCount) return clamped;
+    this.predatorCount = clamped;
+    const seed = (this.config.seed + this.generation * 2654435761) >>> 0;
+    this.predators = new ChomperPack(seed + 131, this.predatorConfig(), this.ecology);
+    this.ecology.relocateSpawnPointsAwayFrom(this.predators.chompers);
+    this.events.push({
+      type: 'spawn',
+      x: WORLD.width * 0.5,
+      y: WORLD.height * 0.5,
+      color: '#ff9b71',
+    });
+    return clamped;
   }
 
   /** Turns the collected rollout into advantages and queues a policy update. */

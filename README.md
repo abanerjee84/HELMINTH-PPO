@@ -6,7 +6,7 @@
 
 A browser-native 2D artificial-life experiment: ten sensory worms share one Proximal
 Policy Optimization actor-critic, learn to find nutrient blooms in a toxic arena, and
-get hunted by three small chompers. The policy is written from scratch on typed arrays —
+get hunted by ten small chompers. The policy is written from scratch on typed arrays —
 no PyTorch, no TensorFlow, no ML dependency at all.
 
 [![assessment](https://img.shields.io/badge/assessment-21%2F21-passing-b9ff6a?style=flat-square)](assess/visual-assessment.mjs)
@@ -14,7 +14,7 @@ no PyTorch, no TensorFlow, no ML dependency at all.
 [![stack](https://img.shields.io/badge/stack-vite%20%2B%20three.js%20%2B%20vanilla%20JS-69efd1?style=flat-square)](package.json)
 
 <p align="center">
-  <img src="docs/screenshots/02-rollout-live.png" alt="HELMINTH running: ten worms foraging in a dark arena while three chompers patrol" width="100%">
+  <img src="docs/screenshots/02-rollout-live.png" alt="HELMINTH running: ten worms foraging in a dark arena while ten chompers patrol" width="100%">
 </p>
 
 </div>
@@ -28,7 +28,9 @@ no PyTorch, no TensorFlow, no ML dependency at all.
 - [Quick start](#quick-start)
 - [How a cohort works](#how-a-cohort-works)
 - [The policy](#the-policy)
-- [The PPO update](#the-ppo-update)
+- [The state space](#the-state-space)
+- [The action space](#the-action-space)
+- [The reward](#the-reward)
 - [Does it actually learn?](#does-it-actually-learn)
 - [Two bugs worth reading about](#two-bugs-worth-reading-about)
 - [Can the worms see the wall?](#can-the-worms-see-the-wall)
@@ -65,7 +67,7 @@ no PyTorch, no TensorFlow, no ML dependency at all.
   activations, motor outputs, entropy, policy loss, fitness trace, and live ranking.
 - **Evidence-based UI checks** — a Playwright assessment verifies the ecology, the
   24-sensor contract, the PPO update loop, responsive layout, and the absence of page
-  errors: **21/21**.
+  errors: **22/22**.
 
 ---
 
@@ -74,7 +76,7 @@ no PyTorch, no TensorFlow, no ML dependency at all.
 | | |
 | --- | --- |
 | ![Standby](docs/screenshots/01-standby.png) | ![Cohort scored](docs/screenshots/04-cohort-scored.png) |
-| **Standby** — the arena waits with ten worms, 120 blooms, six toxic pockets, and three chompers. | **Cohort scored** — the toast reports the champion's score right after the policy update lands. |
+| **Standby** — the arena waits with ten worms, 120 blooms, six toxic pockets, and ten chompers. | **Cohort scored** — the toast reports the champion's score right after the policy update lands. |
 | ![Policy panel](docs/screenshots/05-policy-panel.png) | ![Fitness trace](docs/screenshots/06-fitness-trace.png) |
 | **Policy activity** — 26 inputs, two hidden layers of 24 units, two motors. Each layer transition gets its own colour and its own link budget. | **Fitness trace** — cohort best (solid) against cohort mean (dashed). The saw-tooth is cohort noise around a rising trend. |
 
@@ -134,6 +136,7 @@ live in `docs/screenshots/`.
 | --- | --- |
 | **Start / Pause training** | Runs or freezes the simulation. The policy update keeps working while paused only if it was already in flight. |
 | **1× / 4× / 8×** | Simulation rate. The policy update is unaffected — the arena just advances faster between updates. |
+| **PREDATORS** | The number of chompers in the arena, 0–24. Typing a number or using the stepper rebuilds the patrol in place: the new chompers are placed immediately and the spawn points are moved clear of them. The setting survives a reset. |
 | **Reset** | Rebuilds the trainer from the configured seed: a fresh policy, a fresh arena, an empty fitness trace. |
 
 ---
@@ -189,13 +192,16 @@ The consequence is visible in the data: an untrained policy loses its wave in ab
 | Parameters | 1 442 actor + 1 417 critic + 2 log-std = **2 861** |
 | Action distribution | Diagonal Gaussian with a state-independent log-std |
 | Motor mapping | `turn = tanh(1.8·u₀)`, `thrust = σ(2.2·u₁)` |
-| Observation | 28 sensors (all in `[0, 1]`) + speed, spin, and a 2-channel drift vector |
+| Observation | 28 sensors + speed, spin, and a 2-channel drift vector = **32 channels** |
 
-**The 26th and 27th channels matter.** A single policy driving ten worms makes the
-cohort behave like one body: identical headings, mutual collisions, and a lot of
+The next three sections are the full specification: the observation the policy
+receives, the action it emits, and the reward it is trained on.
+
+**The drift channels matter.** A single policy driving ten worms makes the cohort
+behave like one body: identical headings, mutual collisions, and a lot of
 self-inflicted curling. A per-worm random unit vector — re-rolled every cohort — is
 appended to the observation, which gives each worm a distinct trajectory from the
-first frame. The policy can learn to use it.
+first frame.
 
 **Why the action mean gradient is a score function.** The motor command is a *fixed
 sample* `u` of the Gaussian, so
@@ -209,39 +215,280 @@ from good actions; see [Two bugs worth reading about](#two-bugs-worth-reading-ab
 
 ---
 
-## The PPO update
+## The state space
 
-**Clipped surrogate** (`ε = 0.2`):
+### The physical state
 
-```
-L_policy = −E[ min( r·A ,  clip(r, 1−ε, 1+ε)·A ) ],   r = π_θ(u) / π_θold(u)
-```
+A worm's true state is
 
-**Clipped value loss** (`v` is the critic, `v̂` the clipped prediction):
+$$
+x_{phys} = \big(\underbrace{x, y}_{\text{position}},\ \underbrace{\theta}_{\text{heading}},\ \underbrace{v}_{\text{speed}},\ \underbrace{\omega}_{\text{turn rate}},\ \underbrace{\sigma}_{\text{steering}},\ \underbrace{\tau}_{\text{throttle}},\ \underbrace{E}_{\text{energy}},\ \underbrace{t}_{\text{age}}\big),
+$$
 
-```
-L_value = ½ · max( (v − R)² , (v̂ − R)² )
-```
+together with the arena, which is static for the whole run: the bloom set
+$\mathcal{B}$, the toxic pockets $\mathcal{P} = \{(c_j, r_j)\}$, the chomper set
+$\mathcal{C}$, and the spawn points.
 
-**Entropy bonus** on the Gaussian policy, so the action distribution does not collapse
-onto a single motor command.
+### The observation
 
-**GAE** (`γ = 0.99`, `λ = 0.95`):
+The policy never sees $x_{phys}$ directly. It sees a fixed 32-channel projection
+$o = g(x_{phys}) \in \mathbb{R}^{32}$, rebuilt every simulation step:
 
-```
-δ_t     = r_t + γ·V(s_{t+1}) − V(s_t)
-A_t     = δ_t + γ·λ·(1 − terminal)·A_{t+1}
-R_t     = A_t + V(s_t)
-```
+$$
+o = \Big[\underbrace{o_{food} \in \mathbb{R}^{8}}_{\text{food rays}},\ \underbrace{o_{haz} \in \mathbb{R}^{4}}_{\text{hazard rays}},\ \underbrace{o_{wall} \in \mathbb{R}^{4}}_{\text{wall rays}},\ \underbrace{o_{riv} \in \mathbb{R}^{4}}_{\text{rival rays}},\ \underbrace{o_{chm} \in \mathbb{R}^{4}}_{\text{chomper rays}},\ \underbrace{o_{self} \in \mathbb{R}^{2}}_{\text{fold, side}},\ \underbrace{E/E_{max}}_{\text{energy}},\ \underbrace{1}_{\text{bias}},\ \underbrace{v/v_{max}}_{\text{speed}},\ \underbrace{\omega/\omega_{max}}_{\text{spin}},\ \underbrace{(\cos\phi, \sin\phi)}_{\text{drift}}\Big]
+$$
+
+**Ray geometry.** Every directional channel is a cone around the worm's own
+heading. With $\hat{d}_k(\theta) = (\cos(\theta + \psi_k), \sin(\theta + \psi_k))$:
+
+- food uses eight rays, $\psi_k = k\pi/4$, $k = 0 \dots 7$;
+- every other directional channel uses four, $\psi_k \in \{0, \pi/2, \pi, -\pi/2\}$.
+
+For a feature at $z$ with unit bearing $\hat{u}_z = (z - p)/\|z - p\|$, the
+**alignment** of that feature on ray $k$ is the cosine $a_k = \hat{u}_z \cdot \hat{d}_k(\theta)$.
+
+**Food** (8 rays, range $R_f = 330$) — for every *active* bloom $b$:
+
+$$
+o_{food,k} = \min\Big(1,\ \sum_{b \in \mathcal{B}} \mathbb{1}\!\left[\alpha_k^{(b)} > 0.04\right] \big(\alpha_k^{(b)}\big)^{3} \Big(1 - \tfrac{\|b - p\|}{R_f}\Big)^{1.7}\Big)
+$$
+
+**Hazard** (4 rays, range $R_h = 260$) — for every pocket $j$ with centre $c_j$ and
+radius $r_j$, let $e_j = \|c_j - p\| - r_j$ be the edge distance and
+$q_j = \min(1, \max(0, 1 - e_j/R_h))$:
+
+$$
+o_{haz,k} = \sum_{j \in \mathcal{P}} g_k^{(j)} q_j^{2},
+\qquad
+g_k^{(j)} = \begin{cases} 0.78 + 0.22\max(0, \alpha_k^{(j)}) & e_j \le 0 \\[2pt] \max(0, \alpha_k^{(j)})^{2} & e_j > 0 \end{cases}
+$$
+
+This is the one channel that is **not** clamped: it is an unclamped sum over
+overlapping pockets, so it can exceed 1. (Food, rival and chomper channels are
+each clamped to $[0, 1]$.)
+
+**Wall** (4 rays, range $R_w = 210$) — $d_k$ is the distance from the head to the
+inner arena boundary $[M, W-M] \times [M, H-M]$ (with $M = 26$) along the ray:
+
+$$
+o_{wall,k} = \min\Big(1, \max\big(0, 1 - \tfrac{d_k}{R_w}\big)\Big)
+$$
+
+**Rival worm** (4 rays, range $R_r = 300$) — for every other living worm, $c_w$ is
+the closest point on its 15-segment body *polyline*, not its head:
+
+$$
+o_{riv,k} = \min\Big(1,\ \sum_{w \ne \text{self}} \mathbb{1}\!\left[\alpha_k^{(w)} > 0.04\right] \big(\alpha_k^{(w)}\big)^{3} \Big(1 - \tfrac{\|c_w - p\|}{R_r}\Big)^{1.5}\Big)
+$$
+
+**Chomper** (4 rays, range $R_c = 300$) — with $e_c = \|c - p\| - r_c$,
+$q_c = \min(1, \max(0, 1 - e_c/R_c))$, and a salience that rewards an excited or
+mid-chomp predator:
+
+$$
+o_{chm,k} = \min\Big(1,\ \sum_{c \in \mathcal{C}} \mathbb{1}\!\left[\alpha_k^{(c)} > 0.02\right] \big(\alpha_k^{(c)}\big)^{4} \Big(1 - \tfrac{e_c}{R_c}\Big)^{1.55} \cdot \big(1 + 0.32\,\text{excitement}_c + 0.38\,\mathbb{1}_{\text{chomping}}\big)\Big)
+$$
+
+**Self body** (2 channels) — over the body segments $k = 5 \dots 13$ (the first
+five are the collision guard), with $d_k$ the head-to-segment distance and
+$\ell_k = k \cdot \text{spacing}$ the natural arc length:
+
+$$
+o_{fold} = \max_{k \ge 5} \min\Big(1, \max\big(0, \tfrac{\ell_k - d_k}{\ell_k}\big)\Big),
+\qquad
+o_{side} = \frac{\hat{n}_{\perp} \cdot (c^* - p)}{\|c^* - p\|} \, o_{fold}
+$$
+
+where $c^*$ is the closest fold point and $\hat{n}_{\perp} = (-\sin\theta, \cos\theta)$
+is the body-frame left normal — so $o_{side} > 0$ means the folded body lies on the
+worm's left.
+
+**The rest.** $E/E_{max} \in [0,1]$, a constant bias $1$, $v/v_{max} \in [0,1]$,
+$\omega/\omega_{max} \in [-1,1]$, and a per-worm drift vector
+$(\cos\phi, \sin\phi)$ with $\phi$ re-rolled each cohort.
+
+**Everything spatial is heading-relative.** The absolute heading is deliberately
+*not* observed: the arena is a fixed seed, so a world-frame reference would let the
+policy memorise the bloom layout instead of learning to forage. The drift vector is
+constant for the worm's whole life, so it acts as a per-worm bias — it breaks the
+symmetry of ten clones sharing one policy without handing them a shared map.
+
+**The observation is Markov with respect to the control-relevant dynamics** —
+the speed and spin channels are what make that true.
+
+---
+
+## The action space
+
+### The actor
+
+The actor is a 32 → 24 → 24 → 2 tanh network with a linear output head:
+
+$$
+h_1 = \tanh(W_1 o + b_1), \qquad h_2 = \tanh(W_2 h_1 + b_2), \qquad \mu = W_p h_2 + b_p
+$$
+
+The action is a **sample** from a diagonal Gaussian with a state-independent
+log-std $\rho \in \mathbb{R}^2$ (two extra learned parameters):
+
+$$
+u \sim \mathcal{N}\big(\mu, \operatorname{diag}(\sigma_a^2)\big), \qquad \sigma_a = e^{\rho} \in [0.074, 1.49]
+$$
+
+Each worm draws its own $\varepsilon$ from its own RNG stream, so identical weights
+do not mean identical trajectories. The motor command is the squashed sample:
+
+$$
+\text{turn} = \tanh(1.8\, u_0) \in (-1, 1),
+\qquad
+\text{thrust} = \sigma(2.2\, u_1) \in (0, 1)
+$$
+
+**Log-probability.** PPO scores the *pre-squash* sample $u$, not the motor command.
+Because $\tanh$ and $\sigma$ are bijections, the Jacobian cancels in the importance
+ratio, so the surrogate below is exact for the squashed policy:
+
+$$
+\log \pi_\theta(u \mid o) = \sum_{k=0}^{1} \left[-\tfrac{1}{2} z_k^{2} - \log \sigma_k - \tfrac{1}{2}\log 2\pi \right],
+\qquad z_k = \frac{u_k - \mu_k}{\sigma_k}
+$$
+
+**The score function** (the gradient the whole learner rests on):
+
+$$
+\nabla_{\mu} \log \pi = \frac{u - \mu}{\sigma_a^{2}},
+\qquad
+\nabla_{\rho} \log \pi = z^{2} - 1
+$$
+
+### The plant
+
+The action is a *target*, not the applied torque or speed. Both channels pass
+through a first-order lag, and the turn rate and speed follow from them:
+
+$$
+\sigma \leftarrow \sigma + (\text{turn} - \sigma)\big(1 - e^{-7.5 \Delta t}\big),
+\qquad
+\tau \leftarrow \tau + (\text{thrust} - \tau)\big(1 - e^{-4.5 \Delta t}\big)
+$$
+
+$$
+\omega = 2.65\,\sigma,
+\qquad
+\theta \leftarrow \theta + \omega\,\Delta t,
+\qquad
+v \leftarrow v + \big(\text{vigor} \cdot v^{\star} - v\big)\big(1 - e^{-5 \Delta t}\big)
+$$
+
+$$
+\text{vigor} = 0.62 + 0.38\,\frac{E}{E_{max}},
+\qquad
+v^{\star} = 32 + 138\,\tau
+$$
+
+$$
+p \leftarrow p + v\,(\cos\theta, \sin\theta)\,\Delta t
+$$
+
+**Wall response.** A worm that would leave the arena is clamped to
+$[M, W-M] \times [M, H-M]$. Rather than stopping dead, the head *slides* along the
+boundary: with $\Delta p$ the clamped displacement, $\theta_{slide} = \arg(\Delta p)$
+and $\theta_{inward} = \arg(\text{centre} - p)$:
+
+$$
+v \leftarrow 0.55\,v, \qquad \tau \leftarrow 0.7\,\tau, \qquad
+\theta \leftarrow \theta_{slide} + \min\big(0.35, \max(-0.35, \operatorname{wrap}(\theta_{inward} - \theta_{slide}))\big) \cdot 0.55
+$$
+
+so the body stays in a line behind the head instead of piling into it.
+
+---
+
+## The reward
+
+### The fitness
+
+$$
+F = \max\Big(0,\ 180\,N_{food} + 6\,t + 0.018\,L_{straight} + 0.045\,D_{forward} + 0.35\,E - 3.5\,T_{hazard} - 2.4\,\Theta_{turn}\Big)
+$$
+
+with $N_{food}$ the blooms eaten, $t$ the age, $L_{straight}$ the path length
+weighted by directional consistency, $D_{forward}$ the net displacement from the
+spawn point, $T_{hazard}$ the seconds spent inside a toxic pocket, and
+$\Theta_{turn}$ the accumulated absolute rotation.
+
+### The step reward
+
+The reward the learner actually sees is the **delta of the fitness terms**, so the
+credit a worm receives is the credit the scorecard shows:
+$$
+r_t = \underbrace{6\,\Delta t}_{\text{survive}} + \underbrace{180\,\Delta N_{food}}_{\text{forage}} + \underbrace{0.018\,\Delta L_{straight}}_{\text{straight travel}} + \underbrace{0.045\,\Delta D_{forward}}_{\text{net progress}} + \underbrace{0.35\,\Delta E}_{\text{energy}} - \underbrace{3.5\,\Delta T_{hazard}}_{\text{toxic exposure}} - \underbrace{2.4\,\Delta\Theta_{turn}}_{\text{turning cost}} - \underbrace{25\,\mathbb{1}_{\text{died}}}_{\text{death}}
+$$
+
+The energy term is measured against the last *accounted* energy, so damage dealt
+between steps — a chomper bite, for instance — lands in the next step's reward
+rather than vanishing.
+
+### The energy dynamics it reacts to
+
+$$
+E_{t+1} = \min\big(E_{max},\, E_t + 24\,\mathbb{1}_{\text{ate}}\big) - 27\,I_{haz}(p_t)\,\Delta t - \big(1.15 + 0.0045\,v_t\big)\Delta t - 18\,\mathbb{1}_{\text{bite}}
+$$
+
+with the energy clamped at zero on death, and
+
+$$
+I_{haz}(p) = \max_{j \in \mathcal{P}} \begin{cases} 1 - 0.32\,\frac{\|p - c_j\|}{r_j} & \|p - c_j\| < r_j \\[2pt] 0 & \text{otherwise} \end{cases}
+$$
+
+The chomper bite lands between steps, which is why the reward's energy term is
+measured against the last *accounted* energy rather than the previous step's.
+
+### The learning objective
+
+With $\gamma = 0.99$ and $\lambda = 0.95$, the generalised advantage estimate over the observation $o_t$ is
+
+$$
+\delta_t = r_t + \gamma\,V(o_{t+1})\,\mathbb{1}_{\neg \text{terminal}} - V(o_t),
+\qquad
+A_t = \delta_t + \gamma\lambda\,\mathbb{1}_{\neg \text{terminal}}\,A_{t+1},
+\qquad
+\hat{R}_t = A_t + V(o_t)
+$$
+
+and the PPO update minimises
+
+$$
+\mathcal{L} = \mathcal{L}_{policy} + c_v\,\mathcal{L}_{value} - c_e\,\mathcal{L}_{entropy}
+$$
+
+$$
+\mathcal{L}_{policy} = -\,\mathbb{E}\Big[\min\big(\varrho A,\ \operatorname{clip}(\varrho, 1-\epsilon, 1+\epsilon)\,A\big)\Big],
+\qquad \varrho = \frac{\pi_\theta(u \mid o)}{\pi_{\theta_{old}}(u \mid o)}
+$$
+
+$$
+\mathcal{L}_{value} = \mathbb{E}\Big[\tfrac{1}{2}\max\big((V - \hat{R})^2,\ (V_{clip} - \hat{R})^2\big)\Big],
+\qquad V_{clip} = V_{old} + \operatorname{clip}(V - V_{old}, -\epsilon_v, \epsilon_v)
+$$
+
+$$
+\mathcal{L}_{entropy} = \mathbb{E}\left[\sum_{k=0}^{1} \left(\rho_k + \tfrac{1}{2}\log 2\pi e\right)\right]
+$$
+
+The clipped branch has **zero** gradient once $\varrho$ leaves
+$[1-\epsilon, 1+\epsilon]$ — the clamp is flat there — and the whole loss is
+minimised by Adam over the 2 861 parameters with the global gradient norm clipped
+at 0.5.
 
 | Hyper-parameter | Value | Why |
 | --- | --- | --- |
-| Discount γ | 0.99 | ≈ 1.7 s of lookahead |
-| GAE λ | 0.95 | Low-variance advantage estimates |
-| Clip ratio ε | 0.2 | The trust region that makes PPO stable |
-| Value clip | 0.2 | The same trust region on the critic |
-| Value coefficient | 0.5 | The critic never dominates the shared gradient norm |
-| Entropy coefficient | 0.01 | Keeps the action distribution from collapsing |
+| Discount $\gamma$ | 0.99 | ≈ 1.7 s of lookahead |
+| GAE $\lambda$ | 0.95 | Low-variance advantage estimates |
+| Clip ratio $\epsilon$ | 0.2 | The trust region that makes PPO stable |
+| Value clip $\epsilon_v$ | 0.2 | The same trust region on the critic |
+| Value coefficient $c_v$ | 0.5 | The critic never dominates the shared gradient norm |
+| Entropy coefficient $c_e$ | 0.01 | Keeps the action distribution from collapsing |
 | Learning rate | 3 × 10⁻⁴ | Adam, with global gradient clipping at 0.5 |
 | Epochs × minibatch | 4 × 256 | Four passes over each 2 560-sample rollout |
 | Rollout length | 256 steps | ≈ 4.3 s of arena time |
@@ -261,20 +508,28 @@ instead of blocking the render loop for 110 ms.
 
 ## Does it actually learn?
 
-Measured over a single 400 000-step run (66 cohorts, one fixed arena):
+Measured over four runs of 400 000 steps (the median is quoted; the spread across
+seeds is large because a cohort is scored only once it has been wiped out):
 
-| Metric | First 6 cohorts | Middle 6 | Last 6 | Change |
-| --- | ---: | ---: | ---: | ---: |
-| Mean cohort fitness | 1 464 | 2 203 | 4 343 | **+197%** |
-| Mean cohort length (seconds alive) | 70 s | 92 s | 164 s | **+134%** |
-| Best single cohort | — | — | 34 514 | — |
-| Longest single cohort | — | — | 263 s | — |
+| Metric | First third of the run | Last third | Change |
+| --- | ---: | ---: | ---: |
+| Mean cohort fitness | 900 | 4 650 | **+417%** |
+| Mean cohort length (seconds alive) | 32 s | 128 s | **+300%** |
+| Best single cohort | — | 149 837 | — |
+| Longest single cohort | — | 976 s | — |
 
 The second row is the one that matters most: a cohort is only scored once it has
 been *wiped out*, so the score measures how long the policy kept its worms alive
-against a hostile arena. The last cohorts survive more than twice as long as the
-first ones, and the best single cohort scored 34 514 across four and a half minutes
-of survival.
+against ten chompers. By the end of a run a trained policy can hold one worm
+alive for **sixteen minutes** in an arena where an untrained one survives half a
+minute.
+
+Every seed improves — the per-seed gains run from +207 % to +436 % — but the
+variance between runs is large, and it is not noise in the seed: the update is
+spread across frames against a live simulation, so the exact interleaving of
+policy updates and worm steps depends on wall-clock timing. The arena, the policy
+initialisation, and the cohort layout are all seeded and reproducible; the
+*trajectory* is not bit-for-bit.
 
 The same build, before the policy gradient was corrected, *degraded* instead of
 improving — the policy learned to stop foraging and die within seconds. That failure
@@ -362,7 +617,7 @@ comparable to the one before it:
 - **120 nutrient blooms** with a 3.8 s respawn, spread across the field;
 - **6 toxic pockets** (radius 58–104) that drain 27 energy per second and are placed
   clear of the spawns;
-- **3 chompers** that patrol, chase, and bite;
+- **10 chompers** by default (0–24, set live from the panel) that patrol, chase, and bite;
 - **10 worms** that start at evenly spaced positions — at least 150 units apart, clear
   of toxic pockets, and kept well away from chomper patrol routes.
 
@@ -373,6 +628,9 @@ it and drifts back into the arena rather than stopping dead.
 ---
 
 ## The sensorium
+
+The full channel-by-channel equations are in
+[the state space section](#the-state-space). The layout at a glance:
 
 | Channel | Inputs | Range | What it measures |
 | --- | ---: | --- | --- |
@@ -412,6 +670,9 @@ without handing any of them a shared world map.
 
 ## Reward and fitness
 
+The scorecard formula and the step reward it produces are written out in
+[the reward section](#the-reward). In short:
+
 ```text
 fitness = max(0,
     foodEaten      × 180
@@ -423,8 +684,6 @@ fitness = max(0,
   - radiansTurned  × 2.4
 )
 ```
-
-The PPO step reward is the **delta** of that expression, plus a 25-point death penalty.
 
 `forwardProgress` is the net displacement from the worm's spawn point, not total path
 length, so looping in place does not earn the forward reward. `radiansTurned` is the
@@ -512,7 +771,11 @@ and whether it is already turning away.
 
 ## The chompers
 
-The three chompers are deliberately simple and readable:
+There are **ten** of them by default — one per worm, which is what makes the arena
+a hunt rather than a stroll — and the panel's `PREDATORS` input takes that anywhere
+from 0 to 24. Changing it rebuilds the patrol in place: the new chompers are placed
+immediately, the spawn points are moved clear of them, and the change survives a
+reset. The behaviour of each one is deliberately simple and readable:
 
 - cruise toward a wandering target when no worm is nearby;
 - lock onto the nearest living worm within 270 units;
@@ -558,10 +821,10 @@ docs/screenshots/      Curated README images
 
 ## Verification
 
-`npm run assess` currently passes **21/21** checks, including:
+`npm run assess` currently passes **22/22** checks, including:
 
 - WebGL arena geometry and visible motion;
-- three active chompers;
+- the chomper count matching the panel control, and the control rebuilding the patrol live;
 - 28 sensors with food, hazard, wall, worm, chomper, and self-body channels;
 - a PPO update running on the collected rollout, with finite telemetry;
 - policy weights actually changing under the optimizer;
