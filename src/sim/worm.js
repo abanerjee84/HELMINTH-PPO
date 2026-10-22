@@ -1,0 +1,571 @@
+import { CONFIG, OBSERVATION_COUNT, SENSOR_COUNT, WORLD } from '../config.js';
+import { clamp, lerp } from './random.js';
+
+const FOOD_RAYS = 8;
+const HAZARD_RAYS = 4;
+const WORM_RAYS = 4;
+const CHOMPER_RAYS = 4;
+const SELF_RAYS = 2;
+const SENSOR_OFFSETS = [0, Math.PI / 2, Math.PI, -Math.PI / 2];
+const TWO_PI = Math.PI * 2;
+
+function wrapAngle(angle) {
+  let wrapped = angle;
+  while (wrapped > Math.PI) wrapped -= TWO_PI;
+  while (wrapped < -Math.PI) wrapped += TWO_PI;
+  return wrapped;
+}
+
+export class Worm {
+  constructor({ id, index, color, x, y, heading, hiddenCount = 0, config = CONFIG }) {
+    this.id = id;
+    this.index = index;
+    this.color = color;
+    this.config = config;
+
+    this.x = x;
+    this.y = y;
+    this.spawnX = x;
+    this.spawnY = y;
+    this.heading = heading;
+    this.speed = config.worm.minSpeed;
+    this.steering = 0;
+    this.throttle = 0.45;
+    this.angularVelocity = 0;
+
+    this.energy = config.worm.startEnergy;
+    this.maxEnergy = config.worm.maxEnergy;
+    this.age = 0;
+    this.alive = true;
+    this.deathCause = null;
+
+    this.foodEaten = 0;
+    this.foodEnergy = 0;
+    this.distanceTravelled = 0;
+    this.straightTravel = 0;
+    this.radiansTurned = 0;
+    this.hazardTime = 0;
+    this.predatorHits = 0;
+    this.biteFlash = 0;
+    this.wallHits = 0;
+    this.ateRecently = 0;
+    this.collisionHits = 0;
+    this.selfCollisionHits = 0;
+    this.otherCollisionHits = 0;
+    this.bankedFitness = 0;
+    this.episodes = 0;
+    this.deaths = 0;
+    this.lifetime = 0;
+    this.totalFood = 0;
+    this.totalDistance = 0;
+    this.totalStraight = 0;
+
+    this.velocityX = Math.cos(heading) * config.worm.minSpeed;
+    this.velocityY = Math.sin(heading) * config.worm.minSpeed;
+    this.averageSpeed = config.worm.minSpeed;
+
+    this.sensorValues = new Array(SENSOR_COUNT).fill(0);
+    this.observation = new Array(OBSERVATION_COUNT).fill(0);
+    this.identity = [0, 0];
+    this.activations = {
+      hidden: new Array(hiddenCount).fill(0),
+      outputs: [0, 0],
+    };
+    this.outputs = { turn: 0, thrust: 0 };
+    this.stepReward = 0;
+    this.accountedEnergy = this.energy;
+    this.terminalSettled = false;
+
+    this.body = Array.from({ length: config.worm.segments }, (_, segment) => ({
+      x: x - Math.cos(heading) * config.worm.spacing * segment,
+      y: y - Math.sin(heading) * config.worm.spacing * segment,
+    }));
+    const collisionScale = config.worm.collision?.scale ?? 0.82;
+    this.collisionRadii = Array.from({ length: config.worm.segments }, (_, segment) => {
+      const progress = segment / Math.max(1, config.worm.segments - 1);
+      const taper = Math.pow(progress, 0.78);
+      return config.worm.headRadius * (1 - taper * 0.62) * collisionScale;
+    });
+    this.trail = [{ x, y }];
+    this.trailClock = 0;
+    this.bodyClock = 0;
+  }
+
+  get forwardProgress() {
+    return Math.hypot(this.x - this.spawnX, this.y - this.spawnY);
+  }
+
+  get straightness() {
+    if (this.averageSpeed < 1) return 0;
+    return clamp(
+      Math.hypot(this.velocityX, this.velocityY) / this.averageSpeed,
+      0,
+      1,
+    );
+  }
+
+  get rawFitness() {
+    const f = this.config.fitness;
+    const survival = this.age * f.perSecond;
+    const food = this.foodEaten * f.perFood;
+    const travel = this.straightTravel * f.perUnitTravelled;
+    const forward = this.forwardProgress * f.perUnitForward;
+    const turning = this.radiansTurned * f.perRadianTurned;
+    const energy = this.energy * f.finalEnergy;
+    const hazard = this.hazardTime * f.hazardPenalty;
+    return food + survival + travel + forward + energy - hazard - turning;
+  }
+
+  get fitness() {
+    return this.bankedFitness + Math.max(0, this.rawFitness);
+  }
+
+  get episodeFitness() {
+    return Math.max(0, this.rawFitness);
+  }
+
+  get fitnessParts() {
+    const f = this.config.fitness;
+    return {
+      food: this.foodEaten * f.perFood,
+      survival: this.age * f.perSecond,
+      travel: this.straightTravel * f.perUnitTravelled,
+      forward: this.forwardProgress * f.perUnitForward,
+      turning: this.radiansTurned * f.perRadianTurned,
+      energy: this.energy * f.finalEnergy,
+      hazard: this.hazardTime * f.hazardPenalty,
+    };
+  }
+
+  sense(ecology, predators = [], neighbors = []) {
+    const {
+      foodSensorRange,
+      hazardSensorRange,
+      wormSensorRange = foodSensorRange,
+      chomperSensorRange = hazardSensorRange,
+      spacing,
+    } = this.config.worm;
+    const foodSensors = new Array(FOOD_RAYS).fill(0);
+    const hazardSensors = new Array(HAZARD_RAYS).fill(0);
+    const wormSensors = new Array(WORM_RAYS).fill(0);
+    const chomperSensors = new Array(CHOMPER_RAYS).fill(0);
+    const selfSensors = new Array(SELF_RAYS).fill(0);
+    const foodRangeSq = foodSensorRange * foodSensorRange;
+    const wormRangeSq = wormSensorRange * wormSensorRange;
+
+    for (const food of ecology.foods) {
+      if (!food.active) continue;
+      const dx = food.x - this.x;
+      const dy = food.y - this.y;
+      const distSq = dx * dx + dy * dy;
+      if (distSq > foodRangeSq) continue;
+      const distance = Math.sqrt(distSq) || 1;
+      const closeness = 1 - distance / foodSensorRange;
+      const nx = dx / distance;
+      const ny = dy / distance;
+
+      for (let index = 0; index < FOOD_RAYS; index += 1) {
+        const direction = this.heading + index * (Math.PI / 4);
+        const alignment = nx * Math.cos(direction) + ny * Math.sin(direction);
+        if (alignment <= 0.04) continue;
+        foodSensors[index] += alignment ** 3 * closeness ** 1.7;
+      }
+    }
+
+    for (let index = 0; index < FOOD_RAYS; index += 1) {
+      foodSensors[index] = clamp(foodSensors[index], 0, 1);
+    }
+
+    for (const hazard of ecology.hazards) {
+      const dx = hazard.x - this.x;
+      const dy = hazard.y - this.y;
+      const distance = Math.sqrt(dx * dx + dy * dy) || 1;
+      const edgeDistance = distance - hazard.radius;
+      if (edgeDistance > hazardSensorRange) continue;
+      const nx = dx / distance;
+      const ny = dy / distance;
+      const closeness =
+        edgeDistance <= 0 ? 1 : clamp(1 - edgeDistance / hazardSensorRange, 0, 1);
+
+      for (let index = 0; index < HAZARD_RAYS; index += 1) {
+        const direction = this.heading + SENSOR_OFFSETS[index];
+        const alignment = nx * Math.cos(direction) + ny * Math.sin(direction);
+        const directional =
+          edgeDistance <= 0
+            ? 0.78 + 0.22 * Math.max(0, alignment)
+            : Math.max(0, alignment) ** 2;
+        hazardSensors[index] += directional * closeness * closeness;
+      }
+    }
+
+    for (const neighbor of neighbors) {
+      const other = neighbor?.worm ?? neighbor;
+      if (!other || other === this || !other.alive) continue;
+
+      let nearestX = other.x;
+      let nearestY = other.y;
+      let nearestDistSq =
+        (nearestX - this.x) * (nearestX - this.x) +
+        (nearestY - this.y) * (nearestY - this.y);
+      for (const segment of other.body) {
+        const segmentDistSq =
+          (segment.x - this.x) * (segment.x - this.x) +
+          (segment.y - this.y) * (segment.y - this.y);
+        if (segmentDistSq < nearestDistSq) {
+          nearestDistSq = segmentDistSq;
+          nearestX = segment.x;
+          nearestY = segment.y;
+        }
+      }
+      if (nearestDistSq > wormRangeSq) continue;
+
+      const distance = Math.sqrt(nearestDistSq) || 1;
+      const closeness = 1 - distance / wormSensorRange;
+      const nx = (nearestX - this.x) / distance;
+      const ny = (nearestY - this.y) / distance;
+
+      for (let index = 0; index < WORM_RAYS; index += 1) {
+        const direction = this.heading + SENSOR_OFFSETS[index];
+        const alignment = nx * Math.cos(direction) + ny * Math.sin(direction);
+        if (alignment <= 0.04) continue;
+        wormSensors[index] += alignment ** 3 * closeness ** 1.5;
+      }
+    }
+
+    for (let index = 0; index < WORM_RAYS; index += 1) {
+      wormSensors[index] = clamp(wormSensors[index], 0, 1);
+    }
+
+    for (const predator of predators) {
+      const dx = predator.x - this.x;
+      const dy = predator.y - this.y;
+      const distance = Math.sqrt(dx * dx + dy * dy) || 1;
+      const edgeDistance = distance - predator.radius;
+      if (edgeDistance > chomperSensorRange) continue;
+      const nx = dx / distance;
+      const ny = dy / distance;
+      const closeness =
+        edgeDistance <= 0 ? 1 : clamp(1 - edgeDistance / chomperSensorRange, 0, 1);
+      const salience =
+        1 + predator.excitement * 0.32 + (predator.chompTimer > 0 ? 0.38 : 0);
+
+      for (let index = 0; index < CHOMPER_RAYS; index += 1) {
+        const direction = this.heading + SENSOR_OFFSETS[index];
+        const alignment = nx * Math.cos(direction) + ny * Math.sin(direction);
+        if (alignment <= 0.02) continue;
+        chomperSensors[index] +=
+          alignment ** 4 * closeness ** 1.55 * salience;
+      }
+    }
+
+    for (let index = 0; index < CHOMPER_RAYS; index += 1) {
+      chomperSensors[index] = clamp(chomperSensors[index], 0, 1);
+    }
+
+    const selfGuard = this.config.worm.collision.selfGuardSegments ?? 0;
+    let selfFold = 0;
+    let selfSide = 0;
+    for (let index = selfGuard; index < this.body.length - 1; index += 1) {
+      const a = this.body[index];
+      const b = this.body[index + 1];
+      const abx = b.x - a.x;
+      const aby = b.y - a.y;
+      const lengthSq = abx * abx + aby * aby;
+      const t =
+        lengthSq > 0.0001
+          ? Math.max(
+              0,
+              Math.min(1, ((this.x - a.x) * abx + (this.y - a.y) * aby) / lengthSq),
+            )
+          : 0;
+      const pointX = a.x + abx * t;
+      const pointY = a.y + aby * t;
+      const distance = Math.hypot(this.x - pointX, this.y - pointY);
+      const natural = index * spacing;
+      const fold = clamp((natural - distance) / natural, 0, 1);
+      if (fold <= selfFold) continue;
+      selfFold = fold;
+      const vx = pointX - this.x;
+      const vy = pointY - this.y;
+      const length = Math.hypot(vx, vy) || 1;
+      selfSide =
+        ((Math.cos(this.heading) * vy - Math.sin(this.heading) * vx) / length) * fold;
+    }
+    selfSensors[0] = selfFold;
+    selfSensors[1] = selfSide;
+
+    this.sensorValues = [
+      ...foodSensors,
+      ...hazardSensors,
+      ...wormSensors,
+      ...chomperSensors,
+      ...selfSensors,
+      clamp(this.energy / this.maxEnergy, 0, 1),
+      1,
+    ];
+    for (let index = 0; index < SENSOR_COUNT; index += 1) {
+      this.observation[index] = this.sensorValues[index];
+    }
+    this.observation[SENSOR_COUNT] = this.identity[0];
+    this.observation[SENSOR_COUNT + 1] = this.identity[1];
+    return this.observation;
+  }
+
+  /** Applies a motor command produced by the shared PPO policy. */
+  applyAction(action) {
+    this.outputs = { turn: action.turn, thrust: action.thrust };
+    this.activations = { hidden: action.hidden, outputs: action.mean };
+    return this.outputs;
+  }
+
+  bite(amount) {
+    if (!this.alive) return false;
+    this.energy = Math.max(0, this.energy - amount);
+    this.predatorHits += 1;
+    this.biteFlash = 1;
+    if (this.energy > 0) return false;
+    this.alive = false;
+    this.deathCause = 'predation';
+    return true;
+  }
+
+  /**
+   * Settles a death that happened outside the movement step (a chomper bite
+   * or a body collision) so the rollout records it as a terminal transition.
+   */
+  finalizeTerminal() {
+    if (this.terminalSettled) return 0;
+    this.terminalSettled = true;
+    const f = this.config.fitness;
+    const energyDelta = (this.energy - this.accountedEnergy) * f.finalEnergy;
+    this.accountedEnergy = this.energy;
+    return energyDelta - (f.deathPenalty ?? 0);
+  }
+
+  /**
+   * Starts a fresh life in the same cohort. The previous episode is banked so
+   * the leaderboard still ranks a worm by everything it achieved.
+   */
+  respawn({ x, y, heading }) {
+    const { segments, spacing, minSpeed, startEnergy, maxEnergy } = this.config.worm;
+    this.bankedFitness += Math.max(0, this.rawFitness);
+    this.episodes += 1;
+    this.deaths += 1;
+
+    this.x = x;
+    this.y = y;
+    this.spawnX = x;
+    this.spawnY = y;
+    this.heading = heading;
+    this.speed = minSpeed;
+    this.steering = 0;
+    this.throttle = 0.45;
+    this.angularVelocity = 0;
+    this.energy = startEnergy;
+    this.maxEnergy = maxEnergy;
+    this.age = 0;
+    this.alive = true;
+    this.deathCause = null;
+    this.foodEaten = 0;
+    this.foodEnergy = 0;
+    this.distanceTravelled = 0;
+    this.straightTravel = 0;
+    this.radiansTurned = 0;
+    this.hazardTime = 0;
+    this.predatorHits = 0;
+    this.biteFlash = 0;
+    this.wallHits = 0;
+    this.ateRecently = 0;
+    this.collisionHits = 0;
+    this.selfCollisionHits = 0;
+    this.otherCollisionHits = 0;
+    this.velocityX = Math.cos(heading) * minSpeed;
+    this.velocityY = Math.sin(heading) * minSpeed;
+    this.averageSpeed = minSpeed;
+    this.terminalSettled = false;
+    this.accountedEnergy = this.energy;
+    this.stepReward = 0;
+    this.body = Array.from({ length: segments }, (_, segment) => ({
+      x: x - Math.cos(heading) * spacing * segment,
+      y: y - Math.sin(heading) * spacing * segment,
+    }));
+    this.trail = [{ x, y }];
+    this.trailClock = 0;
+    this.bodyClock = 0;
+  }
+
+  step(dt, ecology) {
+    if (!this.alive) return null;
+
+    const f = this.config.fitness;
+    const previousAge = this.age;
+    const previousFood = this.foodEaten;
+    const previousTravel = this.straightTravel;
+    const previousForward = this.forwardProgress;
+    const previousRadians = this.radiansTurned;
+    const previousHazard = this.hazardTime;
+    const previousEnergy = this.accountedEnergy;
+
+    this.age += dt;
+    this.lifetime += dt;
+    this.biteFlash = Math.max(0, this.biteFlash - dt * 3.4);
+
+    const steeringTarget = this.outputs.turn;
+    const throttleTarget = this.outputs.thrust;
+    const turnLerp = 1 - Math.exp(-7.5 * dt);
+    const thrustLerp = 1 - Math.exp(-4.5 * dt);
+    this.steering = lerp(this.steering, steeringTarget, turnLerp);
+    this.throttle = lerp(this.throttle, throttleTarget, thrustLerp);
+    this.angularVelocity = this.steering * this.config.worm.turnRate;
+    this.heading = wrapAngle(this.heading + this.angularVelocity * dt);
+    this.radiansTurned += Math.abs(this.angularVelocity) * dt;
+
+    const vigor = 0.62 + 0.38 * clamp(this.energy / this.maxEnergy, 0, 1);
+    const targetSpeed =
+      this.config.worm.minSpeed +
+      (this.config.worm.maxSpeed - this.config.worm.minSpeed) * this.throttle;
+    this.speed = lerp(this.speed, targetSpeed * vigor, 1 - Math.exp(-5 * dt));
+
+    const previousX = this.x;
+    const previousY = this.y;
+    this.x += Math.cos(this.heading) * this.speed * dt;
+    this.y += Math.sin(this.heading) * this.speed * dt;
+    const stepDistance = Math.hypot(this.x - previousX, this.y - previousY);
+    this.distanceTravelled += stepDistance;
+    this.totalDistance += stepDistance;
+
+    const velocityX = (this.x - previousX) / dt;
+    const velocityY = (this.y - previousY) / dt;
+    const blend = 1 - Math.exp(-dt / this.config.worm.straightnessWindow);
+    this.velocityX = lerp(this.velocityX, velocityX, blend);
+    this.velocityY = lerp(this.velocityY, velocityY, blend);
+    this.averageSpeed = lerp(this.averageSpeed, this.speed, blend);
+    this.straightTravel += stepDistance * this.straightness;
+    this.totalStraight += stepDistance * this.straightness;
+
+    const margin = 26;
+    let wallHit = false;
+    if (this.x < margin) {
+      this.x = margin;
+      wallHit = true;
+    } else if (this.x > WORLD.width - margin) {
+      this.x = WORLD.width - margin;
+      wallHit = true;
+    }
+    if (this.y < margin) {
+      this.y = margin;
+      wallHit = true;
+    } else if (this.y > WORLD.height - margin) {
+      this.y = WORLD.height - margin;
+      wallHit = true;
+    }
+
+    if (wallHit) {
+      this.wallHits += 1;
+      this.speed *= 0.5;
+      this.throttle *= 0.6;
+      this.heading = Math.atan2(WORLD.height * 0.5 - this.y, WORLD.width * 0.5 - this.x);
+    }
+
+    const eaten = ecology.consumeFoodAt(
+      this.x,
+      this.y,
+      this.config.worm.headRadius + 2,
+    );
+    let foodEvent = null;
+    if (eaten) {
+      this.foodEaten += 1;
+      this.totalFood += 1;
+      this.foodEnergy += this.config.food.energy;
+      this.energy = Math.min(this.maxEnergy, this.energy + this.config.food.energy);
+      this.ateRecently = 1;
+      foodEvent = { x: eaten.x, y: eaten.y };
+    }
+
+    const hazardIntensity = ecology.hazardIntensity(this.x, this.y);
+    let damage = 0;
+    if (hazardIntensity > 0) {
+      damage = hazardIntensity * this.config.hazards.damagePerSecond * dt;
+      this.energy -= damage;
+      this.hazardTime += hazardIntensity * dt;
+    }
+
+    const drain =
+      (this.config.worm.baseDrain + this.speed * this.config.worm.speedDrain) * dt;
+    this.energy -= drain;
+    this.ateRecently = Math.max(0, this.ateRecently - dt * 0.55);
+
+    let died = false;
+    if (this.energy <= 0) {
+      this.energy = 0;
+      this.alive = false;
+      this.deathCause = hazardIntensity > 0 ? 'toxicosis' : 'starvation';
+      died = true;
+      this.terminalSettled = true;
+    }
+
+    this.updateBody(dt);
+    this.trailClock += dt;
+    if (this.trailClock > 0.09) {
+      this.trailClock = 0;
+      this.trail.push({ x: this.x, y: this.y });
+      if (this.trail.length > 120) this.trail.shift();
+    }
+
+    this.accountedEnergy = this.energy;
+    this.stepReward =
+      (this.age - previousAge) * f.perSecond +
+      (this.foodEaten - previousFood) * f.perFood +
+      (this.straightTravel - previousTravel) * f.perUnitTravelled +
+      (this.forwardProgress - previousForward) * f.perUnitForward -
+      (this.radiansTurned - previousRadians) * f.perRadianTurned -
+      (this.hazardTime - previousHazard) * f.hazardPenalty +
+      (this.energy - previousEnergy) * f.finalEnergy -
+      (died ? (f.deathPenalty ?? 0) : 0);
+
+    return {
+      wormId: this.id,
+      food: foodEvent,
+      died,
+      deathCause: this.deathCause,
+      hazard: hazardIntensity > 0,
+      hazardIntensity,
+      wallHit,
+    };
+  }
+
+  updateBody(dt) {
+    const { segments, spacing } = this.config.worm;
+    this.bodyClock += dt;
+    this.body[0].x = this.x;
+    this.body[0].y = this.y;
+
+    for (let index = 1; index < segments; index += 1) {
+      const previous = this.body[index - 1];
+      const current = this.body[index];
+      let dx = previous.x - current.x;
+      let dy = previous.y - current.y;
+      const distance = Math.hypot(dx, dy);
+
+      if (distance < 0.0001) {
+        dx = -Math.cos(this.heading);
+        dy = -Math.sin(this.heading);
+      } else {
+        dx /= distance;
+        dy /= distance;
+      }
+
+      const follow = 1 - Math.exp(-this.config.worm.bodyFriction * dt);
+      current.x = lerp(current.x, previous.x - dx * spacing, follow);
+      current.y = lerp(current.y, previous.y - dy * spacing, follow);
+
+      dx = previous.x - current.x;
+      dy = previous.y - current.y;
+      const clampedDistance = Math.hypot(dx, dy);
+      if (clampedDistance > spacing && clampedDistance > 0.0001) {
+        current.x = previous.x - (dx / clampedDistance) * spacing;
+        current.y = previous.y - (dy / clampedDistance) * spacing;
+      }
+    }
+  }
+}
